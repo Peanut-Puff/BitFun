@@ -8,6 +8,7 @@ export const noCoreDependencyCrates = [
   'tool-call-jsonrepair',
   'agent-runtime',
   'observability',
+  'observability-otel',
   'harness',
   'plugin-runtime-host',
   'product-capabilities',
@@ -73,6 +74,26 @@ export const forbiddenManifestDependencyRules = [
 ];
 
 export const lightweightBoundaryRules = [
+  {
+    crateName: 'observability-otel',
+    reason:
+      'the concrete OTel service may depend downward on portable observability contracts but not on product assembly or app entrypoints',
+    forbiddenDeps: [
+      'bitfun-core',
+      'bitfun-ai-adapters',
+      'bitfun-services-core',
+      'bitfun-services-integrations',
+      'bitfun-product-capabilities',
+      'bitfun-product-domains',
+      'bitfun-transport',
+      'bitfun-cli',
+      'tauri',
+      'ratatui',
+      'crossterm',
+      'arboard',
+      'syntect-tui',
+    ],
+  },
   {
     crateName: 'observability',
     reason:

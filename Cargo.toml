@@ -16,6 +16,7 @@ members = [
     "src/crates/adapters/transport",
     "src/crates/services/services-core",
     "src/crates/services/services-integrations",
+    "src/crates/services/observability-otel",
     "src/crates/services/relay-service",
     "src/crates/services/page-function-runtime",
     "src/crates/services/terminal",
