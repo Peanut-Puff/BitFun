@@ -1,5 +1,8 @@
 # Frontend Logging Specification
 
+Frontend logger output is local diagnostic output. It is not an OTel Log source
+and must not be forwarded wholesale to a remote telemetry exporter.
+
 ## Rules
 
 1. **Use English only** - All log messages must be in English
@@ -103,3 +106,19 @@ Rules:
 3. Treat `sendDebugProbe` as a thin wrapper over the shared logger/timing helpers, not as a separate logging system
 4. Do not replace protocol or persisted fields such as `duration_ms` when they are part of API payloads, events, or stored data
 5. Do not migrate animation, polling, or deadline logic that depends on raw clock semantics into the logging helper layer
+
+## Telemetry Boundary
+
+The current frontend logger may include locally useful errors, stacks, route
+state, paths, or other diagnostic objects. That makes it unsuitable for direct
+remote export. Do not add an OTLP transport to `createLogger`, `logger`, or
+`sendDebugProbe`, and do not mirror their data objects into backend telemetry.
+
+Future browser performance telemetry must go through a dedicated infrastructure
+adapter with fixed operation/route classes and a schema equivalent to the Rust
+privacy gate. It may report counts, durations, outcomes, Web Vitals, and bounded
+platform classes. It must not report input values, key presses, component props,
+DOM content, prompts, model output, tool payloads, paths, URLs, account/device
+identity, raw errors, or stacks. Trace context may be passed only through a
+versioned trusted BitFun bridge contract, never through arbitrary third-party
+requests.
