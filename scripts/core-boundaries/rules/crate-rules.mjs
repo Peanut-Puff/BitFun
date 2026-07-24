@@ -7,6 +7,7 @@ export const noCoreDependencyCrates = [
   'agent-stream',
   'tool-call-jsonrepair',
   'agent-runtime',
+  'observability',
   'harness',
   'plugin-runtime-host',
   'product-capabilities',
@@ -72,6 +73,35 @@ export const forbiddenManifestDependencyRules = [
 ];
 
 export const lightweightBoundaryRules = [
+  {
+    crateName: 'observability',
+    reason:
+      'observability must keep typed facts and privacy contracts portable without SDK, transport, product, or platform implementations',
+    forbiddenDeps: [
+      'bitfun-core',
+      'bitfun-ai-adapters',
+      'bitfun-services-core',
+      'bitfun-services-integrations',
+      'bitfun-product-capabilities',
+      'bitfun-product-domains',
+      'bitfun-transport',
+      'bitfun-cli',
+      'terminal-core',
+      'tool-runtime',
+      'tauri',
+      'tokio',
+      'reqwest',
+      'rmcp',
+      'ratatui',
+      'crossterm',
+      'arboard',
+      'syntect-tui',
+      'opentelemetry',
+      'opentelemetry_sdk',
+      'opentelemetry-otlp',
+      'tracing-opentelemetry',
+    ],
+  },
   {
     crateName: 'core-types',
     reason: 'core-types must stay low-level DTO-only',

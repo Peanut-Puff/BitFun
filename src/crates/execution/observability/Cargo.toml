@@ -1,0 +1,31 @@
+[package]
+name = "bitfun-observability"
+version = "0.2.13"
+authors = ["BitFun Team"]
+edition = "2021"
+description = "Portable, privacy-gated observability contracts for BitFun"
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+thiserror = "2"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "warn"
+unexpected_cfgs = "warn"
+unreachable_pub = "warn"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+perf = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "warn"
+unimplemented = "warn"
+undocumented_unsafe_blocks = "warn"
