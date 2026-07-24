@@ -16,3 +16,12 @@
 !src/crates/services/page-function-runtime/Cargo.toml
 !src/crates/services/page-function-runtime/src/
 !src/crates/services/page-function-runtime/src/**
+!src/crates/services/observability-otel/
+!src/crates/services/observability-otel/Cargo.toml
+!src/crates/services/observability-otel/src/
+!src/crates/services/observability-otel/src/**
+!src/crates/execution/
+!src/crates/execution/observability/
+!src/crates/execution/observability/Cargo.toml
+!src/crates/execution/observability/src/
+!src/crates/execution/observability/src/**

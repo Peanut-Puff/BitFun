@@ -22,6 +22,8 @@ pub(super) struct RelayConfig {
     /// Path to the SQLite database file used for account storage.
     /// When None, account features are disabled (relay acts as pure relay only).
     pub db_path: Option<String>,
+    /// Durable root for the anonymous telemetry installation identity.
+    pub telemetry_state_dir: String,
 }
 
 impl Default for RelayConfig {
@@ -39,6 +41,7 @@ impl Default for RelayConfig {
             page_public_base_url: None,
             page_auth_base_url: None,
             db_path: None,
+            telemetry_state_dir: "/tmp/bitfun-room-web/.bitfun-relay".to_string(),
         }
     }
 }
@@ -88,6 +91,12 @@ impl RelayConfig {
         cfg.page_auth_base_url = std::env::var("RELAY_PAGE_AUTH_BASE_URL")
             .ok()
             .filter(|value| !value.trim().is_empty());
+        cfg.telemetry_state_dir = std::env::var("RELAY_TELEMETRY_STATE_DIR").unwrap_or_else(|_| {
+            std::path::Path::new(&cfg.room_web_dir)
+                .join(".bitfun-relay")
+                .to_string_lossy()
+                .into_owned()
+        });
         cfg
     }
 }

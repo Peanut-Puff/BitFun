@@ -4,6 +4,10 @@
 //! Uses `DiskAssetStore` for filesystem-backed mobile-web file storage.
 
 use anyhow::Context;
+use bitfun_observability_otel::{
+    deployment_config_from_env, EnvironmentTelemetrySecrets, TelemetryEntrypoint, TelemetryRuntime,
+    TelemetryRuntimeMetadata,
+};
 use std::sync::Arc;
 use tracing::info;
 
@@ -23,6 +27,7 @@ async fn main() -> anyhow::Result<()> {
 
     let cfg = RelayConfig::from_env();
     info!("BitFun Relay Server v{}", env!("CARGO_PKG_VERSION"));
+    let telemetry_runtime = initialize_telemetry(&cfg);
 
     let room_manager = RoomManager::new();
     let asset_store = Arc::new(DiskAssetStore::new_with_max_bytes(
@@ -114,10 +119,70 @@ async fn main() -> anyhow::Result<()> {
     info!("Relay server listening on {}", cfg.listen_addr);
     info!("WebSocket endpoint: ws://{}/ws", cfg.listen_addr);
 
-    axum::serve(
+    let serve_result = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
     )
-    .await?;
+    .with_graceful_shutdown(shutdown_signal())
+    .await;
+    if let Err(error) = telemetry_runtime.shutdown() {
+        tracing::warn!("Telemetry shutdown did not complete: {error}");
+    }
+    serve_result?;
     Ok(())
+}
+
+fn initialize_telemetry(config: &RelayConfig) -> TelemetryRuntime {
+    let runtime = TelemetryRuntime::new(
+        TelemetryRuntimeMetadata::new(
+            "bitfun-relay-server",
+            env!("CARGO_PKG_VERSION"),
+            TelemetryEntrypoint::Relay,
+            &config.telemetry_state_dir,
+        ),
+        Arc::new(EnvironmentTelemetrySecrets),
+    );
+    match deployment_config_from_env("BITFUN_TELEMETRY") {
+        Ok(config) => {
+            if let Err(error) = runtime.apply_config(config) {
+                tracing::warn!(
+                    "Telemetry deployment configuration was rejected and telemetry is disabled: {error}"
+                );
+            }
+        }
+        Err(error) => tracing::warn!(
+            "Telemetry deployment configuration is invalid and telemetry is disabled: {error}"
+        ),
+    }
+    runtime
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::warn!("Could not install the Ctrl-C handler: {error}");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::warn!("Could not install the termination signal handler: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(unix)]
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await;
 }
