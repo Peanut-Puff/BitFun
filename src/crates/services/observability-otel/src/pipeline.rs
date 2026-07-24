@@ -1,6 +1,6 @@
 use crate::settings::{TelemetryRuntimeMetadata, ValidatedTelemetrySettings};
 use crate::TelemetryRuntimeError;
-use bitfun_observability::config::{OtlpCompression, OtlpTransport};
+use bitfun_observability::config::OtlpCompression;
 use bitfun_observability::{
     descriptor_registry, Attribute, AttributeValue, LogRecord as BitFunLogRecord, MetricRecord,
     MetricUnit, MetricValue, Severity as BitFunSeverity, SpanContext as BitFunSpanContext,
@@ -13,9 +13,7 @@ use opentelemetry::trace::{
 };
 use opentelemetry::{InstrumentationScope, KeyValue, Value};
 use opentelemetry_http::{Bytes, HttpClient, HttpError, Request, Response};
-use opentelemetry_otlp::{
-    Compression, Protocol, WithExportConfig, WithHttpConfig, WithTonicConfig,
-};
+use opentelemetry_otlp::{Compression, Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::logs::{LogExporter, SdkLogger, SdkLoggerProvider};
 use opentelemetry_sdk::metrics::{
     data::ResourceMetrics, exporter::PushMetricExporter, PeriodicReader, SdkMeterProvider,
@@ -548,100 +546,49 @@ impl Drop for OtelGeneration {
 fn build_span_exporter(
     settings: &ValidatedTelemetrySettings,
 ) -> Result<opentelemetry_otlp::SpanExporter, TelemetryRuntimeError> {
-    match settings.transport {
-        OtlpTransport::HttpProtobuf => {
-            let builder = opentelemetry_otlp::SpanExporter::builder()
-                .with_http()
-                .with_endpoint(http_signal_endpoint(settings, "/v1/traces"))
-                .with_protocol(Protocol::HttpBinary)
-                .with_timeout(settings.export_timeout)
-                .with_http_client(blocking_http_client(settings)?);
-            let result = match settings.compression {
-                OtlpCompression::None => builder.build(),
-                OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
-            };
-            result.map_err(|error| TelemetryRuntimeError::exporter("trace", error))
-        }
-        OtlpTransport::Grpc => {
-            let builder = opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(settings.endpoint.clone())
-                .with_protocol(Protocol::Grpc)
-                .with_timeout(settings.export_timeout)
-                .with_interceptor(grpc_metadata_interceptor(&settings.headers)?);
-            let result = match settings.compression {
-                OtlpCompression::None => builder.build(),
-                OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
-            };
-            result.map_err(|error| TelemetryRuntimeError::exporter("trace", error))
-        }
-    }
+    let builder = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(http_signal_endpoint(settings, "/v1/traces"))
+        .with_protocol(Protocol::HttpBinary)
+        .with_timeout(settings.export_timeout)
+        .with_http_client(blocking_http_client(settings)?);
+    let result = match settings.compression {
+        OtlpCompression::None => builder.build(),
+        OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
+    };
+    result.map_err(|error| TelemetryRuntimeError::exporter("trace", error))
 }
 
 fn build_metric_exporter(
     settings: &ValidatedTelemetrySettings,
 ) -> Result<opentelemetry_otlp::MetricExporter, TelemetryRuntimeError> {
-    match settings.transport {
-        OtlpTransport::HttpProtobuf => {
-            let builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_http()
-                .with_endpoint(http_signal_endpoint(settings, "/v1/metrics"))
-                .with_protocol(Protocol::HttpBinary)
-                .with_timeout(settings.export_timeout)
-                .with_http_client(blocking_http_client(settings)?);
-            let result = match settings.compression {
-                OtlpCompression::None => builder.build(),
-                OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
-            };
-            result.map_err(|error| TelemetryRuntimeError::exporter("metric", error))
-        }
-        OtlpTransport::Grpc => {
-            let builder = opentelemetry_otlp::MetricExporter::builder()
-                .with_tonic()
-                .with_endpoint(settings.endpoint.clone())
-                .with_protocol(Protocol::Grpc)
-                .with_timeout(settings.export_timeout)
-                .with_interceptor(grpc_metadata_interceptor(&settings.headers)?);
-            let result = match settings.compression {
-                OtlpCompression::None => builder.build(),
-                OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
-            };
-            result.map_err(|error| TelemetryRuntimeError::exporter("metric", error))
-        }
-    }
+    let builder = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .with_endpoint(http_signal_endpoint(settings, "/v1/metrics"))
+        .with_protocol(Protocol::HttpBinary)
+        .with_timeout(settings.export_timeout)
+        .with_http_client(blocking_http_client(settings)?);
+    let result = match settings.compression {
+        OtlpCompression::None => builder.build(),
+        OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
+    };
+    result.map_err(|error| TelemetryRuntimeError::exporter("metric", error))
 }
 
 fn build_log_exporter(
     settings: &ValidatedTelemetrySettings,
 ) -> Result<opentelemetry_otlp::LogExporter, TelemetryRuntimeError> {
-    match settings.transport {
-        OtlpTransport::HttpProtobuf => {
-            let builder = opentelemetry_otlp::LogExporter::builder()
-                .with_http()
-                .with_endpoint(http_signal_endpoint(settings, "/v1/logs"))
-                .with_protocol(Protocol::HttpBinary)
-                .with_timeout(settings.export_timeout)
-                .with_http_client(blocking_http_client(settings)?);
-            let result = match settings.compression {
-                OtlpCompression::None => builder.build(),
-                OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
-            };
-            result.map_err(|error| TelemetryRuntimeError::exporter("log", error))
-        }
-        OtlpTransport::Grpc => {
-            let builder = opentelemetry_otlp::LogExporter::builder()
-                .with_tonic()
-                .with_endpoint(settings.endpoint.clone())
-                .with_protocol(Protocol::Grpc)
-                .with_timeout(settings.export_timeout)
-                .with_interceptor(grpc_metadata_interceptor(&settings.headers)?);
-            let result = match settings.compression {
-                OtlpCompression::None => builder.build(),
-                OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
-            };
-            result.map_err(|error| TelemetryRuntimeError::exporter("log", error))
-        }
-    }
+    let builder = opentelemetry_otlp::LogExporter::builder()
+        .with_http()
+        .with_endpoint(http_signal_endpoint(settings, "/v1/logs"))
+        .with_protocol(Protocol::HttpBinary)
+        .with_timeout(settings.export_timeout)
+        .with_http_client(blocking_http_client(settings)?);
+    let result = match settings.compression {
+        OtlpCompression::None => builder.build(),
+        OtlpCompression::Gzip => builder.with_compression(Compression::Gzip).build(),
+    };
+    result.map_err(|error| TelemetryRuntimeError::exporter("log", error))
 }
 
 fn blocking_http_client(
@@ -671,28 +618,6 @@ fn blocking_http_client(
     Ok(RestrictedHttpClient {
         inner,
         configured_headers,
-    })
-}
-
-fn grpc_metadata_interceptor(
-    headers: &HashMap<String, String>,
-) -> Result<
-    impl FnMut(tonic::Request<()>) -> Result<tonic::Request<()>, tonic::Status> + Clone,
-    TelemetryRuntimeError,
-> {
-    let mut metadata = tonic::metadata::MetadataMap::with_capacity(headers.len());
-    for (name, value) in headers {
-        let name: tonic::metadata::MetadataKey<tonic::metadata::Ascii> = name
-            .parse()
-            .map_err(|_| TelemetryRuntimeError::Secret("header name is invalid for gRPC"))?;
-        let value: tonic::metadata::MetadataValue<tonic::metadata::Ascii> = value
-            .parse()
-            .map_err(|_| TelemetryRuntimeError::Secret("header value is invalid for gRPC"))?;
-        metadata.insert(name, value);
-    }
-    Ok(move |mut request: tonic::Request<()>| {
-        *request.metadata_mut() = metadata.clone();
-        Ok(request)
     })
 }
 
@@ -868,7 +793,6 @@ fn system_time(unix_nanos: u128) -> SystemTime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tonic::service::Interceptor;
 
     #[test]
     fn http_headers_are_rebuilt_from_transport_and_product_configuration() {
@@ -894,23 +818,5 @@ mod tests {
             "product-value"
         );
         assert!(!request.headers().contains_key("x-injected"));
-    }
-
-    #[test]
-    fn grpc_metadata_is_rebuilt_from_product_configuration() {
-        let headers = HashMap::from([("authorization".to_string(), "product-value".to_string())]);
-        let mut interceptor = grpc_metadata_interceptor(&headers).unwrap();
-        let mut request = tonic::Request::new(());
-        request
-            .metadata_mut()
-            .insert("x-injected", "environment-value".parse().unwrap());
-
-        let request = interceptor.call(request).unwrap();
-
-        assert_eq!(
-            request.metadata().get("authorization").unwrap(),
-            "product-value"
-        );
-        assert!(request.metadata().get("x-injected").is_none());
     }
 }

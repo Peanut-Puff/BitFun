@@ -77,7 +77,6 @@ export interface AppConfig {
 }
 
 export type TelemetryLevel = 'off' | 'basic' | 'diagnostic';
-export type OtlpTransport = 'http_protobuf' | 'grpc';
 export type OtlpCompression = 'none' | 'gzip';
 
 export interface TelemetryConfig {
@@ -90,7 +89,6 @@ export interface TelemetryConfig {
   };
   exporter: {
     endpoint?: string | null;
-    transport: OtlpTransport;
     compression: OtlpCompression;
     headers_secret_ref?: string | null;
     allow_insecure_loopback: boolean;

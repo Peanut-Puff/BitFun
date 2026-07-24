@@ -118,14 +118,6 @@ impl Default for TelemetrySignalConfig {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum OtlpTransport {
-    #[default]
-    HttpProtobuf,
-    Grpc,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum OtlpCompression {
     None,
     #[default]
@@ -136,7 +128,6 @@ pub enum OtlpCompression {
 #[serde(default)]
 pub struct TelemetryExporterConfig {
     pub endpoint: Option<String>,
-    pub transport: OtlpTransport,
     pub compression: OtlpCompression,
     pub headers_secret_ref: Option<String>,
     pub allow_insecure_loopback: bool,
@@ -146,7 +137,6 @@ impl Default for TelemetryExporterConfig {
     fn default() -> Self {
         Self {
             endpoint: None,
-            transport: OtlpTransport::HttpProtobuf,
             compression: OtlpCompression::Gzip,
             headers_secret_ref: None,
             allow_insecure_loopback: false,

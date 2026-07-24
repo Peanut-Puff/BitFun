@@ -1,7 +1,5 @@
 use crate::{OtlpHeaders, TelemetryRuntimeError, TelemetrySecretProvider};
-use bitfun_observability::config::{
-    OtlpCompression, OtlpTransport, TelemetryConfig, TELEMETRY_CONFIG_VERSION,
-};
+use bitfun_observability::config::{OtlpCompression, TelemetryConfig, TELEMETRY_CONFIG_VERSION};
 use bitfun_observability::TelemetryLevel;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -85,7 +83,6 @@ impl TelemetryRuntimeMetadata {
 pub(crate) struct ValidatedTelemetrySettings {
     pub endpoint: String,
     pub audience: String,
-    pub transport: OtlpTransport,
     pub compression: OtlpCompression,
     pub headers: OtlpHeaders,
     pub max_queue_size: usize,
@@ -173,11 +170,6 @@ pub(crate) fn validate_enabled_config(
             "endpoint must not contain credentials, query, or fragment",
         ));
     }
-    if config.exporter.transport == OtlpTransport::Grpc && parsed.path() != "/" {
-        return Err(TelemetryRuntimeError::InvalidConfig(
-            "gRPC endpoint must not contain a path",
-        ));
-    }
     if parsed.scheme() != "https"
         && !(config.exporter.allow_insecure_loopback && is_loopback(&parsed))
     {
@@ -210,7 +202,6 @@ pub(crate) fn validate_enabled_config(
     Ok(ValidatedTelemetrySettings {
         endpoint: endpoint.trim_end_matches('/').to_string(),
         audience,
-        transport: config.exporter.transport,
         compression: config.exporter.compression,
         headers,
         max_queue_size: config.batch.max_queue_size,
@@ -251,15 +242,6 @@ fn deployment_config_from_source(
     }
     if let Some(value) = source_value(prefix, "ENDPOINT", &mut source) {
         config.exporter.endpoint = Some(value);
-    }
-    if let Some(value) = source_value(prefix, "TRANSPORT", &mut source) {
-        config.exporter.transport = match value.as_str() {
-            "http_protobuf" => OtlpTransport::HttpProtobuf,
-            "grpc" => OtlpTransport::Grpc,
-            _ => {
-                return Err(TelemetryRuntimeError::InvalidConfig("TRANSPORT is invalid"));
-            }
-        };
     }
     if let Some(value) = source_value(prefix, "COMPRESSION", &mut source) {
         config.exporter.compression = match value.as_str() {
@@ -465,7 +447,7 @@ fn reserved_transport_header(name: &str) -> bool {
             | "traceparent"
             | "tracestate"
             | "baggage"
-    ) || name.starts_with("grpc-")
+    )
 }
 
 #[cfg(test)]
@@ -499,13 +481,9 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_rejects_embedded_credentials_and_grpc_paths() {
+    fn endpoint_rejects_embedded_credentials() {
         let mut config = local_config();
         config.exporter.endpoint = Some("http://user:pass@127.0.0.1:4318".to_string());
-        assert!(validate_enabled_config(&config, &NoTelemetrySecrets).is_err());
-
-        config.exporter.endpoint = Some("http://127.0.0.1:4317/prefix".to_string());
-        config.exporter.transport = OtlpTransport::Grpc;
         assert!(validate_enabled_config(&config, &NoTelemetrySecrets).is_err());
     }
 
@@ -544,7 +522,6 @@ mod tests {
         for name in [
             "host",
             "content-type",
-            "grpc-timeout",
             "traceparent",
             "tracestate",
             "baggage",
@@ -580,7 +557,6 @@ mod tests {
         let values = std::collections::HashMap::from([
             ("TEST_LEVEL", "diagnostic"),
             ("TEST_ENDPOINT", "http://127.0.0.1:4318"),
-            ("TEST_TRANSPORT", "grpc"),
             ("TEST_COMPRESSION", "none"),
             ("TEST_HEADERS_SECRET_REF", "env:TEST_HEADERS"),
             ("TEST_ALLOW_INSECURE_LOOPBACK", "true"),
@@ -604,7 +580,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.level, TelemetryLevel::Diagnostic);
-        assert_eq!(config.exporter.transport, OtlpTransport::Grpc);
         assert_eq!(config.exporter.compression, OtlpCompression::None);
         assert_eq!(
             config.exporter.headers_secret_ref.as_deref(),

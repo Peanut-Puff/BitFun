@@ -4,7 +4,7 @@ use axum::http::{header, HeaderMap, StatusCode};
 use axum::routing::post;
 use axum::Router;
 use bitfun_observability::config::{
-    OtlpCompression, OtlpTransport, TelemetryBatchConfig, TelemetryConfig, TelemetryExporterConfig,
+    OtlpCompression, TelemetryBatchConfig, TelemetryConfig, TelemetryExporterConfig,
     TelemetrySamplingConfig,
 };
 use bitfun_observability::domains::{
@@ -16,15 +16,12 @@ use bitfun_observability_otel::{
     DeploymentEnvironment, TelemetryEntrypoint, TelemetryRuntime, TelemetryRuntimeMetadata,
 };
 use opentelemetry_proto::tonic::collector::logs::v1::{
-    logs_service_server::{LogsService, LogsServiceServer},
     ExportLogsServiceRequest, ExportLogsServiceResponse,
 };
 use opentelemetry_proto::tonic::collector::metrics::v1::{
-    metrics_service_server::{MetricsService, MetricsServiceServer},
     ExportMetricsServiceRequest, ExportMetricsServiceResponse,
 };
 use opentelemetry_proto::tonic::collector::trace::v1::{
-    trace_service_server::{TraceService, TraceServiceServer},
     ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
 use prost::Message;
@@ -32,8 +29,6 @@ use std::io::Read;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::oneshot;
-use tokio_stream::wrappers::TcpListenerStream;
-use tonic::transport::Server;
 
 #[derive(Clone, Default)]
 struct CollectorState {
@@ -59,42 +54,7 @@ impl CollectorState {
 async fn otlp_http_protobuf_round_trips_all_three_signals() {
     let (state, endpoint, stop_tx, server) = start_http_collector().await;
 
-    emit_one_operation(endpoint, OtlpTransport::HttpProtobuf);
-    state.assert_received_all_signals();
-
-    let _ = stop_tx.send(());
-    server.await.unwrap();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn otlp_grpc_round_trips_all_three_signals() {
-    let state = CollectorState::default();
-    let collector = GrpcCollector(state.clone());
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let address = listener.local_addr().unwrap();
-    let (stop_tx, stop_rx) = oneshot::channel();
-    let server = tokio::spawn(async move {
-        Server::builder()
-            .add_service(
-                TraceServiceServer::new(collector.clone())
-                    .accept_compressed(tonic::codec::CompressionEncoding::Gzip),
-            )
-            .add_service(
-                MetricsServiceServer::new(collector.clone())
-                    .accept_compressed(tonic::codec::CompressionEncoding::Gzip),
-            )
-            .add_service(
-                LogsServiceServer::new(collector)
-                    .accept_compressed(tonic::codec::CompressionEncoding::Gzip),
-            )
-            .serve_with_incoming_shutdown(TcpListenerStream::new(listener), async {
-                let _ = stop_rx.await;
-            })
-            .await
-            .unwrap();
-    });
-
-    emit_one_operation(format!("http://{address}"), OtlpTransport::Grpc);
+    emit_one_operation(endpoint);
     state.assert_received_all_signals();
 
     let _ = stop_tx.send(());
@@ -108,16 +68,12 @@ async fn endpoint_reconfiguration_replaces_the_export_generation() {
     let temporary = tempfile::tempdir().unwrap();
     let runtime = test_runtime(temporary.path());
 
-    runtime
-        .apply_config(test_config(first_endpoint, OtlpTransport::HttpProtobuf))
-        .unwrap();
+    runtime.apply_config(test_config(first_endpoint)).unwrap();
     emit_startup_fact(&runtime);
     runtime.force_flush().unwrap();
     first_state.assert_received_all_signals();
 
-    runtime
-        .apply_config(test_config(second_endpoint, OtlpTransport::HttpProtobuf))
-        .unwrap();
+    runtime.apply_config(test_config(second_endpoint)).unwrap();
     emit_startup_fact(&runtime);
     runtime.shutdown().unwrap();
     second_state.assert_received_all_signals();
@@ -135,7 +91,7 @@ async fn signal_switches_disable_only_the_selected_pipeline() {
     let (state, endpoint, stop_tx, server) = start_http_collector().await;
     let temporary = tempfile::tempdir().unwrap();
     let runtime = test_runtime(temporary.path());
-    let mut config = test_config(endpoint, OtlpTransport::HttpProtobuf);
+    let mut config = test_config(endpoint);
     config.signals.traces = false;
     runtime.apply_config(config).unwrap();
 
@@ -161,9 +117,7 @@ fn unreachable_exporter_is_contained_and_reported() {
     drop(listener);
     let temporary = tempfile::tempdir().unwrap();
     let runtime = test_runtime(temporary.path());
-    runtime
-        .apply_config(test_config(endpoint, OtlpTransport::HttpProtobuf))
-        .unwrap();
+    runtime.apply_config(test_config(endpoint)).unwrap();
 
     emit_startup_fact(&runtime);
 
@@ -197,12 +151,10 @@ async fn start_http_collector() -> (
     (state, endpoint, stop_tx, server)
 }
 
-fn emit_one_operation(endpoint: String, transport: OtlpTransport) {
+fn emit_one_operation(endpoint: String) {
     let temporary = tempfile::tempdir().unwrap();
     let runtime = test_runtime(temporary.path());
-    runtime
-        .apply_config(test_config(endpoint, transport))
-        .unwrap();
+    runtime.apply_config(test_config(endpoint)).unwrap();
     emit_startup_fact(&runtime);
     runtime.shutdown().unwrap();
 }
@@ -219,12 +171,11 @@ fn test_runtime(state_directory: &std::path::Path) -> TelemetryRuntime {
     )
 }
 
-fn test_config(endpoint: String, transport: OtlpTransport) -> TelemetryConfig {
+fn test_config(endpoint: String) -> TelemetryConfig {
     TelemetryConfig {
         level: TelemetryLevel::Diagnostic,
         exporter: TelemetryExporterConfig {
             endpoint: Some(endpoint),
-            transport,
             compression: OtlpCompression::Gzip,
             allow_insecure_loopback: true,
             ..Default::default()
@@ -348,61 +299,4 @@ fn protobuf_response<T: Message>(
         [(header::CONTENT_TYPE, "application/x-protobuf")],
         response.encode_to_vec(),
     )
-}
-
-#[derive(Clone)]
-struct GrpcCollector(CollectorState);
-
-#[tonic::async_trait]
-impl TraceService for GrpcCollector {
-    async fn export(
-        &self,
-        request: tonic::Request<ExportTraceServiceRequest>,
-    ) -> Result<tonic::Response<ExportTraceServiceResponse>, tonic::Status> {
-        let count = request
-            .into_inner()
-            .resource_spans
-            .into_iter()
-            .flat_map(|resource| resource.scope_spans)
-            .map(|scope| scope.spans.len())
-            .sum::<usize>();
-        self.0.traces.fetch_add(count, Ordering::Release);
-        Ok(tonic::Response::new(ExportTraceServiceResponse::default()))
-    }
-}
-
-#[tonic::async_trait]
-impl MetricsService for GrpcCollector {
-    async fn export(
-        &self,
-        request: tonic::Request<ExportMetricsServiceRequest>,
-    ) -> Result<tonic::Response<ExportMetricsServiceResponse>, tonic::Status> {
-        let count = request
-            .into_inner()
-            .resource_metrics
-            .into_iter()
-            .flat_map(|resource| resource.scope_metrics)
-            .map(|scope| scope.metrics.len())
-            .sum::<usize>();
-        self.0.metrics.fetch_add(count, Ordering::Release);
-        Ok(tonic::Response::new(ExportMetricsServiceResponse::default()))
-    }
-}
-
-#[tonic::async_trait]
-impl LogsService for GrpcCollector {
-    async fn export(
-        &self,
-        request: tonic::Request<ExportLogsServiceRequest>,
-    ) -> Result<tonic::Response<ExportLogsServiceResponse>, tonic::Status> {
-        let count = request
-            .into_inner()
-            .resource_logs
-            .into_iter()
-            .flat_map(|resource| resource.scope_logs)
-            .map(|scope| scope.log_records.len())
-            .sum::<usize>();
-        self.0.logs.fetch_add(count, Ordering::Release);
-        Ok(tonic::Response::new(ExportLogsServiceResponse::default()))
-    }
 }
