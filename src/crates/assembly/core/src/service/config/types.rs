@@ -4,6 +4,7 @@
 
 use crate::util::errors::*;
 use async_trait::async_trait;
+use bitfun_observability::config::TelemetryConfig;
 use bitfun_runtime_ports::{PermissionRule, ToolPermissionConfig};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -106,7 +107,7 @@ fn default_close_button_behavior() -> String {
 pub struct AppConfig {
     pub language: String,
     pub auto_update: bool,
-    pub telemetry: bool,
+    pub telemetry: TelemetryConfig,
     pub startup_behavior: String,
     pub confirm_on_exit: bool,
     pub restore_windows: bool,
@@ -1581,7 +1582,7 @@ impl Default for AppConfig {
         Self {
             language: "zh-CN".to_string(),
             auto_update: true,
-            telemetry: false,
+            telemetry: TelemetryConfig::default(),
             startup_behavior: "lastWorkspace".to_string(),
             confirm_on_exit: true,
             restore_windows: true,
@@ -2041,6 +2042,24 @@ mod tests {
             .expect("legacy config should deserialize with permission defaults");
 
         assert_eq!(config.tool_permissions, ToolPermissionConfig::default());
+    }
+
+    #[test]
+    fn legacy_telemetry_boolean_migrates_to_the_versioned_shape() {
+        let config: GlobalConfig = serde_json::from_value(serde_json::json!({
+            "app": { "telemetry": true }
+        }))
+        .expect("legacy telemetry consent should deserialize");
+
+        assert_eq!(
+            config.app.telemetry.level,
+            bitfun_observability::TelemetryLevel::Basic
+        );
+        assert!(config.app.telemetry.exporter.endpoint.is_none());
+
+        let serialized = serde_json::to_value(config).expect("config should serialize");
+        assert_eq!(serialized["app"]["telemetry"]["version"], 1);
+        assert_eq!(serialized["app"]["telemetry"]["level"], "basic");
     }
 
     #[test]

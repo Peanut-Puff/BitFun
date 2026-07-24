@@ -60,7 +60,7 @@ export interface MemoriesConfig {
 export interface AppConfig {
   language: string;
   auto_update: boolean;
-  telemetry: boolean;
+  telemetry: TelemetryConfig;
   startup_behavior: string;
   confirm_on_exit: boolean;
   restore_windows: boolean;
@@ -73,6 +73,40 @@ export interface AppConfig {
   ai_experience: AIExperienceConfig;
   user_tool_groups?: UserToolGroupsConfig;
   user_skill_groups?: UserSkillGroupsConfig;
+}
+
+export type TelemetryLevel = 'off' | 'basic' | 'diagnostic';
+export type OtlpTransport = 'http_protobuf' | 'grpc';
+export type OtlpCompression = 'none' | 'gzip';
+
+export interface TelemetryConfig {
+  version: number;
+  level: TelemetryLevel;
+  signals: {
+    traces: boolean;
+    metrics: boolean;
+    logs: boolean;
+  };
+  exporter: {
+    endpoint?: string | null;
+    transport: OtlpTransport;
+    compression: OtlpCompression;
+    headers_secret_ref?: string | null;
+    allow_insecure_loopback: boolean;
+  };
+  batch: {
+    max_queue_size: number;
+    max_export_batch_size: number;
+    scheduled_delay_ms: number;
+    metrics_export_interval_ms: number;
+    export_timeout_ms: number;
+    shutdown_timeout_ms: number;
+  };
+  sampling: {
+    diagnostic_trace_ratio: number;
+    basic_success_log_ratio: number;
+    diagnostic_success_log_ratio: number;
+  };
 }
 
 export interface UserToolGroupsConfig {
