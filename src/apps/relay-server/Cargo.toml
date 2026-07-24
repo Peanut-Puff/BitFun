@@ -21,6 +21,7 @@ path = "src/bin/relay_admin.rs"
 # Dependencies stay explicit so this application and relay-service can be
 # built from their reduced standalone Docker context.
 bitfun-relay-service = { path = "../../crates/services/relay-service" }
+bitfun-observability-otel = { path = "../../crates/services/observability-otel" }
 axum = "0.8"
 tower-http = { version = "0.6.11", features = ["fs"] }
 tokio = { version = "1.52", default-features = false, features = ["rt-multi-thread", "macros", "net", "time", "sync"] }

@@ -13,6 +13,7 @@ pub mod logging;
 pub mod macos_menubar;
 pub mod runtime;
 pub mod startup_trace;
+mod telemetry;
 pub mod theme;
 pub mod tray;
 
@@ -313,6 +314,9 @@ pub async fn run() {
     startup_timings.record_elapsed("initialize_global_config", step_started);
     startup_trace.record_elapsed_step("native_pre_tauri", "initialize_global_config", step_started);
 
+    let telemetry_runtime = telemetry::initialize(get_path_manager_arc().user_data_dir()).await;
+    telemetry::spawn_config_listener(telemetry_runtime.clone());
+
     // Initialize global I18nService so bot/remote-connect language is always in sync.
     {
         use bitfun_core::service::config::get_global_config_service;
@@ -471,6 +475,7 @@ pub async fn run() {
         )
         .manage(app_state)
         .manage(desktop_runtime)
+        .manage(telemetry_runtime.clone())
         .manage(coordinator_state)
         .manage(scheduler_state)
         .manage(path_manager)
@@ -1532,9 +1537,13 @@ pub async fn run() {
 
     match app {
         Ok(app) => {
-            app.run(|_app_handle, event| match event {
+            let telemetry_runtime = telemetry_runtime.clone();
+            app.run(move |_app_handle, event| match event {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
                     crash_diagnostics::mark_clean_shutdown("tauri_run_exit");
+                    if let Err(error) = telemetry_runtime.shutdown() {
+                        log::warn!("Telemetry shutdown did not complete: {error}");
+                    }
                     perform_process_exit_cleanup();
                 }
                 #[cfg(target_os = "macos")]
@@ -1554,6 +1563,9 @@ pub async fn run() {
         }
         Err(e) => {
             log::error!("Error while running tauri application: {}", e);
+            if let Err(error) = telemetry_runtime.shutdown() {
+                log::warn!("Telemetry shutdown did not complete: {error}");
+            }
         }
     }
 }

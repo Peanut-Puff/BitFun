@@ -10,6 +10,10 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use bitfun_observability_otel::{
+    deployment_config_from_env, EnvironmentTelemetrySecrets, TelemetryEntrypoint, TelemetryRuntime,
+    TelemetryRuntimeMetadata,
+};
 use clap::Parser;
 use serde::Serialize;
 use std::{collections::HashSet, net::SocketAddr, path::PathBuf, sync::Arc};
@@ -66,6 +70,7 @@ async fn main() -> Result<()> {
     tracing::info!("BitFun Server v{}", env!("CARGO_PKG_VERSION"));
 
     let args = ServerArgs::parse();
+    let telemetry_runtime = initialize_telemetry();
     let external_workspace_root = args
         .workspace
         .map(|path| {
@@ -122,9 +127,71 @@ async fn main() -> Result<()> {
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, app).await?;
+    let serve_result = axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await;
+    if let Err(error) = telemetry_runtime.shutdown() {
+        tracing::warn!("Telemetry shutdown did not complete: {error}");
+    }
+    serve_result?;
 
     Ok(())
+}
+
+fn initialize_telemetry() -> TelemetryRuntime {
+    let state_directory = bitfun_core::infrastructure::get_path_manager_arc().user_data_dir();
+    let runtime = TelemetryRuntime::new(
+        TelemetryRuntimeMetadata::new(
+            "bitfun-server",
+            env!("CARGO_PKG_VERSION"),
+            TelemetryEntrypoint::Server,
+            state_directory,
+        ),
+        Arc::new(EnvironmentTelemetrySecrets),
+    );
+    match deployment_config_from_env("BITFUN_TELEMETRY") {
+        Ok(config) => {
+            if let Err(error) = runtime.apply_config(config) {
+                tracing::warn!(
+                    "Telemetry deployment configuration was rejected and telemetry is disabled: {error}"
+                );
+            }
+        }
+        Err(error) => tracing::warn!(
+            "Telemetry deployment configuration is invalid and telemetry is disabled: {error}"
+        ),
+    }
+    runtime
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        if let Err(error) = tokio::signal::ctrl_c().await {
+            tracing::warn!("Could not install the Ctrl-C handler: {error}");
+            std::future::pending::<()>().await;
+        }
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut signal) => {
+                signal.recv().await;
+            }
+            Err(error) => {
+                tracing::warn!("Could not install the termination signal handler: {error}");
+                std::future::pending::<()>().await;
+            }
+        }
+    };
+
+    #[cfg(unix)]
+    tokio::select! {
+        () = ctrl_c => {},
+        () = terminate => {},
+    }
+    #[cfg(not(unix))]
+    ctrl_c.await;
 }
 
 pub(crate) fn normalize_browser_origin(value: &str) -> Result<String> {

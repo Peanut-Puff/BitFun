@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 bitfun-core = { path = "../../crates/assembly/core", default-features = false, features = ["product-full"] }
+bitfun-observability-otel = { path = "../../crates/services/observability-otel" }
 
 # Web framework
 axum = { workspace = true }
@@ -30,4 +31,3 @@ chrono = { workspace = true }
 
 [lints]
 workspace = true
-

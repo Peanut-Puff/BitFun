@@ -24,6 +24,7 @@ mod product_assembly;
 mod prompts;
 mod root_handlers;
 mod runtime;
+mod telemetry;
 mod ui;
 
 use anyhow::{anyhow, Result};
@@ -838,6 +839,8 @@ async fn run_cli() -> Result<()> {
         }
         CliConfig::default()
     });
+    let telemetry_runtime = telemetry::initialize().await;
+    let _telemetry_shutdown = telemetry::ShutdownGuard::new(telemetry_runtime.clone());
 
     match cli.command {
         Some(Commands::Chat { agent }) => {
@@ -970,7 +973,7 @@ async fn run_cli() -> Result<()> {
                 bitfun_core::product_runtime::build_local_runtime_services(&workspace, 16)?;
             let product_runtime = product_assembly::assemble_cli_runtime_parts(services)?;
             if !management::print_doctor(&product_runtime).await? {
-                std::process::exit(1);
+                return Err(anyhow::Error::new(ReportedCliError { exit_code: 1 }));
             }
         }
 
@@ -1005,7 +1008,7 @@ async fn run_cli() -> Result<()> {
             action: Some(AcpAction::Doctor { command }),
         }) => {
             if !acp_cli::print_doctor(&command).await? {
-                std::process::exit(1);
+                return Err(anyhow::Error::new(ReportedCliError { exit_code: 1 }));
             }
         }
 
@@ -1021,7 +1024,7 @@ async fn run_cli() -> Result<()> {
             AcpClientsAction::List => acp_cli::list_external_clients().await?,
             AcpClientsAction::Doctor => {
                 if !acp_cli::doctor_external_clients().await? {
-                    std::process::exit(1);
+                    return Err(anyhow::Error::new(ReportedCliError { exit_code: 1 }));
                 }
             }
             AcpClientsAction::Enable { client, permission } => {
