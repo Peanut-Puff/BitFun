@@ -563,6 +563,7 @@ async fn initialize_core_services(
     workspace_root: &std::path::Path,
     approval_policy: runtime::approval::CliApprovalPolicy,
     bootstrap_profile: BootstrapProfile,
+    telemetry: &bitfun_observability::Telemetry,
 ) -> Result<std::sync::Arc<runtime::CliRuntimeContext>> {
     use bitfun_core::infrastructure::ai::AIClientFactory;
 
@@ -585,8 +586,9 @@ async fn initialize_core_services(
 
     initialize_terminal_service().await;
 
-    let agentic_system = agent::agentic_system::init_agentic_system(
+    let agentic_system = agent::agentic_system::init_agentic_system_with_telemetry(
         bitfun_core::product_assembly::DeliveryProfile::Cli,
+        telemetry.clone(),
     )
     .await
     .map_err(|error| anyhow!("Failed to initialize agentic system: {error}"))?;
@@ -678,6 +680,7 @@ async fn run_interactive(
     config: CliConfig,
     default_agent: String,
     _workspace_str: String,
+    telemetry: &bitfun_observability::Telemetry,
 ) -> Result<()> {
     use ui::startup::{StartupPage, StartupResult};
 
@@ -698,6 +701,7 @@ async fn run_interactive(
         &workspace_path,
         runtime::approval::CliApprovalPolicy::Ask,
         BootstrapProfile::Interactive,
+        telemetry,
     )
     .await?;
     // 3.5 Restore persisted account session (if any)
@@ -841,11 +845,26 @@ async fn run_cli() -> Result<()> {
     });
     let telemetry_runtime = telemetry::initialize().await;
     let _telemetry_shutdown = telemetry::ShutdownGuard::new(telemetry_runtime.clone());
+    let telemetry = telemetry_runtime.telemetry();
+    bitfun_observability::domains::start_startup(
+        &telemetry,
+        bitfun_observability::domains::StartupStartFacts {
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: bitfun_observability::domains::current_platform_class(),
+            entrypoint: bitfun_observability::domains::Entrypoint::Cli,
+            phase: bitfun_observability::domains::StartupPhase::Ready,
+            state: bitfun_observability::domains::RuntimeState::Ready,
+        },
+        None,
+    )
+    .finish(bitfun_observability::domains::StartupFinishFacts {
+        completion: bitfun_observability::domains::CompletionFacts::completed(),
+    });
 
     match cli.command {
         Some(Commands::Chat { agent }) => {
             // Interactive mode with startup page, scoped to the current directory.
-            run_interactive(config, agent, ".".to_string()).await?;
+            run_interactive(config, agent, ".".to_string(), &telemetry).await?;
         }
 
         Some(Commands::Exec {
@@ -891,13 +910,14 @@ async fn run_cli() -> Result<()> {
                     ),
                     approval_mode,
                 },
+                &telemetry,
             )
             .await?;
         }
 
         Some(Commands::Sessions { action }) => {
             if let Some((session_id, runtime)) =
-                root_handlers::handle_session_action(action).await?
+                root_handlers::handle_session_action(action, &telemetry).await?
             {
                 run_interactive_with_session(config, session_id, runtime).await?;
             }
@@ -964,7 +984,7 @@ async fn run_cli() -> Result<()> {
         },
 
         Some(Commands::Usage { session_id }) => {
-            management::print_usage_report(session_id.as_deref()).await?;
+            management::print_usage_report(session_id.as_deref(), &telemetry).await?;
         }
 
         Some(Commands::Doctor) => {
@@ -986,7 +1006,7 @@ async fn run_cli() -> Result<()> {
         }
 
         Some(Commands::Daemon { action }) => match action {
-            DaemonAction::Run => daemon::run_daemon().await?,
+            DaemonAction::Run => daemon::run_daemon(&telemetry).await?,
             DaemonAction::Install => daemon::install_service()?,
             DaemonAction::Uninstall => daemon::uninstall_service()?,
             DaemonAction::Status => daemon::print_status()?,
@@ -1054,7 +1074,7 @@ async fn run_cli() -> Result<()> {
             let workspace_str = ".".to_string();
 
             let default_agent = config.behavior.default_agent.clone();
-            run_interactive(config, default_agent, workspace_str).await?;
+            run_interactive(config, default_agent, workspace_str, &telemetry).await?;
         }
     }
 

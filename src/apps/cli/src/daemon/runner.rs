@@ -17,7 +17,7 @@ use super::pid;
 
 /// Run the daemon in the foreground until signalled to stop, or until the
 /// relay rejects the account token (logout / token revoked elsewhere).
-pub(crate) async fn run_daemon() -> Result<()> {
+pub(crate) async fn run_daemon(telemetry: &bitfun_observability::Telemetry) -> Result<()> {
     if pid::is_daemon_running() {
         return Err(anyhow!(
             "another bitfun daemon is already running (see `bitfun daemon status`)"
@@ -31,6 +31,7 @@ pub(crate) async fn run_daemon() -> Result<()> {
         &workspace_root,
         runtime::approval::CliApprovalPolicy::Ask,
         BootstrapProfile::Interactive,
+        telemetry,
     )
     .await?;
 

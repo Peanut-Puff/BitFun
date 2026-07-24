@@ -28,6 +28,17 @@ async fn main() -> anyhow::Result<()> {
     let cfg = RelayConfig::from_env();
     info!("BitFun Relay Server v{}", env!("CARGO_PKG_VERSION"));
     let telemetry_runtime = initialize_telemetry(&cfg);
+    let startup_observation = bitfun_observability::domains::start_startup(
+        &telemetry_runtime.telemetry(),
+        bitfun_observability::domains::StartupStartFacts {
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: bitfun_observability::domains::current_platform_class(),
+            entrypoint: bitfun_observability::domains::Entrypoint::Relay,
+            phase: bitfun_observability::domains::StartupPhase::Runtime,
+            state: bitfun_observability::domains::RuntimeState::Started,
+        },
+        None,
+    );
 
     let room_manager = RoomManager::new();
     let asset_store = Arc::new(DiskAssetStore::new_with_max_bytes(
@@ -116,6 +127,9 @@ async fn main() -> anyhow::Result<()> {
     info!("Asset store capacity: {} bytes", cfg.asset_store_max_bytes);
 
     let listener = tokio::net::TcpListener::bind(cfg.listen_addr).await?;
+    startup_observation.finish(bitfun_observability::domains::StartupFinishFacts {
+        completion: bitfun_observability::domains::CompletionFacts::completed(),
+    });
     info!("Relay server listening on {}", cfg.listen_addr);
     info!("WebSocket endpoint: ws://{}/ws", cfg.listen_addr);
 

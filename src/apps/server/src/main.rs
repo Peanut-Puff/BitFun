@@ -71,6 +71,17 @@ async fn main() -> Result<()> {
 
     let args = ServerArgs::parse();
     let telemetry_runtime = initialize_telemetry();
+    let startup_observation = bitfun_observability::domains::start_startup(
+        &telemetry_runtime.telemetry(),
+        bitfun_observability::domains::StartupStartFacts {
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: bitfun_observability::domains::current_platform_class(),
+            entrypoint: bitfun_observability::domains::Entrypoint::Server,
+            phase: bitfun_observability::domains::StartupPhase::Runtime,
+            state: bitfun_observability::domains::RuntimeState::Started,
+        },
+        None,
+    );
     let external_workspace_root = args
         .workspace
         .map(|path| {
@@ -127,6 +138,9 @@ async fn main() -> Result<()> {
     );
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    startup_observation.finish(bitfun_observability::domains::StartupFinishFacts {
+        completion: bitfun_observability::domains::CompletionFacts::completed(),
+    });
     let serve_result = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal())
         .await;

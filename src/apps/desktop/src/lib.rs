@@ -316,6 +316,17 @@ pub async fn run() {
 
     let telemetry_runtime = telemetry::initialize(get_path_manager_arc().user_data_dir()).await;
     telemetry::spawn_config_listener(telemetry_runtime.clone());
+    let startup_observation = bitfun_observability::domains::start_startup(
+        &telemetry_runtime.telemetry(),
+        bitfun_observability::domains::StartupStartFacts {
+            app_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: bitfun_observability::domains::current_platform_class(),
+            entrypoint: bitfun_observability::domains::Entrypoint::Desktop,
+            phase: bitfun_observability::domains::StartupPhase::Runtime,
+            state: bitfun_observability::domains::RuntimeState::Started,
+        },
+        None,
+    );
 
     // Initialize global I18nService so bot/remote-connect language is always in sync.
     {
@@ -362,7 +373,7 @@ pub async fn run() {
 
     let step_started = Instant::now();
     let (coordinator, scheduler, event_queue, event_router, ai_client_factory, token_usage_service) =
-        match init_agentic_system().await {
+        match init_agentic_system(telemetry_runtime.telemetry()).await {
             Ok(state) => state,
             Err(e) => {
                 log::error!("Failed to initialize agentic system: {}", e);
@@ -1537,6 +1548,9 @@ pub async fn run() {
 
     match app {
         Ok(app) => {
+            startup_observation.finish(bitfun_observability::domains::StartupFinishFacts {
+                completion: bitfun_observability::domains::CompletionFacts::completed(),
+            });
             let telemetry_runtime = telemetry_runtime.clone();
             app.run(move |_app_handle, event| match event {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
@@ -1562,6 +1576,11 @@ pub async fn run() {
             });
         }
         Err(e) => {
+            startup_observation.finish(bitfun_observability::domains::StartupFinishFacts {
+                completion: bitfun_observability::domains::CompletionFacts::failed(
+                    bitfun_observability::domains::SafeErrorType::Internal,
+                ),
+            });
             log::error!("Error while running tauri application: {}", e);
             if let Err(error) = telemetry_runtime.shutdown() {
                 log::warn!("Telemetry shutdown did not complete: {error}");
@@ -1570,7 +1589,9 @@ pub async fn run() {
     }
 }
 
-async fn init_agentic_system() -> anyhow::Result<(
+async fn init_agentic_system(
+    telemetry: bitfun_observability::Telemetry,
+) -> anyhow::Result<(
     Arc<bitfun_core::agentic::coordination::ConversationCoordinator>,
     Arc<bitfun_core::agentic::coordination::DialogScheduler>,
     Arc<bitfun_core::agentic::events::EventQueue>,
@@ -1677,6 +1698,15 @@ async fn init_agentic_system() -> anyhow::Result<(
     event_router.subscribe_internal(
         "thread_goal_tokens".to_string(),
         Arc::new(bitfun_core::agentic::goal_mode::ThreadGoalTokenSubscriber),
+    );
+    event_router.subscribe_internal(
+        "observability".to_string(),
+        Arc::new(
+            bitfun_core::agentic::telemetry::AgentTelemetrySubscriber::new(
+                telemetry,
+                bitfun_observability::domains::Entrypoint::Desktop,
+            ),
+        ),
     );
 
     log::info!("Token usage service initialized and subscriber registered");

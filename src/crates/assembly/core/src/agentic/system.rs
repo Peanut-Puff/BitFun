@@ -11,10 +11,13 @@ use crate::agentic::execution;
 use crate::agentic::goal_mode::ThreadGoalTokenSubscriber;
 use crate::agentic::persistence;
 use crate::agentic::session;
+use crate::agentic::telemetry::AgentTelemetrySubscriber;
 use crate::agentic::tools;
 use crate::infrastructure::ai::AIClientFactory;
 use crate::infrastructure::try_get_path_manager_arc;
 use crate::service::token_usage::{TokenUsageService, TokenUsageSubscriber};
+use bitfun_observability::domains::Entrypoint;
+use bitfun_observability::Telemetry;
 use bitfun_product_capabilities::DeliveryProfile;
 
 /// Agentic runtime state shared by host adapters.
@@ -45,6 +48,24 @@ pub fn select_agentic_system_profile(delivery_profile: DeliveryProfile) -> Resul
 pub async fn init_agentic_system_for_profile(
     delivery_profile: DeliveryProfile,
 ) -> Result<AgenticSystem> {
+    init_agentic_system_for_profile_impl(delivery_profile, None).await
+}
+
+/// Initialize the agentic runtime for a product profile and project its
+/// authoritative lifecycle events into the supplied telemetry sink.
+pub async fn init_agentic_system_for_profile_with_telemetry(
+    delivery_profile: DeliveryProfile,
+    telemetry: Telemetry,
+    telemetry_entrypoint: Entrypoint,
+) -> Result<AgenticSystem> {
+    init_agentic_system_for_profile_impl(delivery_profile, Some((telemetry, telemetry_entrypoint)))
+        .await
+}
+
+async fn init_agentic_system_for_profile_impl(
+    delivery_profile: DeliveryProfile,
+    telemetry: Option<(Telemetry, Entrypoint)>,
+) -> Result<AgenticSystem> {
     info!("Initializing agentic system for profile {delivery_profile}");
 
     select_agentic_system_profile(delivery_profile)?;
@@ -63,6 +84,15 @@ pub async fn init_agentic_system_for_profile(
         "thread_goal_tokens".to_string(),
         Arc::new(ThreadGoalTokenSubscriber),
     );
+    if let Some((telemetry, telemetry_entrypoint)) = telemetry {
+        event_router.subscribe_internal(
+            "observability".to_string(),
+            Arc::new(AgentTelemetrySubscriber::new(
+                telemetry,
+                telemetry_entrypoint,
+            )),
+        );
+    }
 
     let context_store = Arc::new(session::SessionContextStore::new());
     let context_compressor = Arc::new(session::ContextCompressor::new(Default::default()));

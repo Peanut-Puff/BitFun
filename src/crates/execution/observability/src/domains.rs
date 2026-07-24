@@ -38,6 +38,20 @@ safe_enum!(PlatformClass {
     Ohos => "ohos",
     Other => "other",
 });
+
+pub const fn current_platform_class() -> PlatformClass {
+    if cfg!(target_env = "ohos") {
+        PlatformClass::Ohos
+    } else if cfg!(target_os = "macos") {
+        PlatformClass::Macos
+    } else if cfg!(target_os = "windows") {
+        PlatformClass::Windows
+    } else if cfg!(target_os = "linux") {
+        PlatformClass::Linux
+    } else {
+        PlatformClass::Other
+    }
+}
 safe_enum!(Outcome {
     Completed => "completed",
     Failed => "failed",

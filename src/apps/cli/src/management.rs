@@ -217,7 +217,10 @@ fn validate_usage_session_id(session_id: &str) -> Result<()> {
         .map_err(anyhow::Error::msg)
 }
 
-pub(crate) async fn print_usage_report(session_id: Option<&str>) -> Result<()> {
+pub(crate) async fn print_usage_report(
+    session_id: Option<&str>,
+    telemetry: &bitfun_observability::Telemetry,
+) -> Result<()> {
     if let Some(session_id) = session_id.filter(|value| !value.trim().is_empty()) {
         validate_usage_session_id(session_id)?;
     }
@@ -226,6 +229,7 @@ pub(crate) async fn print_usage_report(session_id: Option<&str>) -> Result<()> {
         &workspace_path,
         crate::runtime::approval::CliApprovalPolicy::Reject,
         crate::BootstrapProfile::Management,
+        telemetry,
     )
     .await?;
     let resolved_session_id = match session_id {

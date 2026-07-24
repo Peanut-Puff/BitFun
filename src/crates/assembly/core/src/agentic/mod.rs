@@ -40,6 +40,7 @@ pub(crate) mod permission_policy;
 
 // Ephemeral side-question module (used by desktop /btw overlay)
 pub mod side_question;
+pub mod telemetry;
 
 // Session goal mode (/goal command)
 pub mod goal_mode;
@@ -75,5 +76,8 @@ pub use round_preempt::{
 pub use session::*;
 pub use side_question::*;
 pub use skill_agent_snapshot::*;
-pub use system::{init_agentic_system, init_agentic_system_for_profile, AgenticSystem};
+pub use system::{
+    init_agentic_system, init_agentic_system_for_profile,
+    init_agentic_system_for_profile_with_telemetry, AgenticSystem,
+};
 pub use workspace::{WorkspaceBackend, WorkspaceBinding};

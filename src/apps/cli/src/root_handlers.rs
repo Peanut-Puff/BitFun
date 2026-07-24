@@ -41,7 +41,11 @@ pub(crate) struct ExecCommandArgs {
     pub approval_mode: ExecApprovalMode,
 }
 
-pub(crate) async fn handle_exec_command(config: CliConfig, args: ExecCommandArgs) -> Result<()> {
+pub(crate) async fn handle_exec_command(
+    config: CliConfig,
+    args: ExecCommandArgs,
+    telemetry: &bitfun_observability::Telemetry,
+) -> Result<()> {
     let workspace_path_resolved = std::env::current_dir().ok();
 
     if let Some(ref ws_path) = workspace_path_resolved {
@@ -113,6 +117,7 @@ pub(crate) async fn handle_exec_command(config: CliConfig, args: ExecCommandArgs
             .unwrap_or_else(|| Path::new(".")),
         approval_policy,
         crate::BootstrapProfile::Execution,
+        telemetry,
     )
     .await
     {
@@ -186,6 +191,7 @@ fn resolve_exec_message(message: Option<String>) -> Result<String> {
 
 pub(crate) async fn handle_session_action(
     action: SessionAction,
+    telemetry: &bitfun_observability::Telemetry,
 ) -> Result<Option<(String, std::sync::Arc<crate::runtime::CliRuntimeContext>)>> {
     let workspace_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let approval_policy = match &action {
@@ -195,9 +201,13 @@ pub(crate) async fn handle_session_action(
         _ => crate::runtime::approval::CliApprovalPolicy::Reject,
     };
     let bootstrap_profile = action.bootstrap_profile();
-    let runtime =
-        crate::initialize_core_services(&workspace_path, approval_policy, bootstrap_profile)
-            .await?;
+    let runtime = crate::initialize_core_services(
+        &workspace_path,
+        approval_policy,
+        bootstrap_profile,
+        telemetry,
+    )
+    .await?;
 
     match action {
         SessionAction::List => {
