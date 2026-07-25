@@ -4,13 +4,14 @@ use crate::agentic::events::{AgenticEvent, DeepReviewQueueStatus, EventSubscribe
 use bitfun_agent_runtime::event_bus::EventSubscriberResult;
 use bitfun_core_types::errors::ErrorCategory;
 use bitfun_observability::domains::{
-    record_token_usage, start_compression, start_goal, start_inference, start_permission,
-    start_review, start_round, start_session, start_tool, start_turn, AgentModeClass,
-    AttemptBucket, CompletionFacts, CompressionFinishFacts, CompressionObservation,
-    CompressionStartFacts, CompressionTrigger, Entrypoint, FindingBucket, FinishReasonClass,
-    GoalFinishFacts, GoalObservation, GoalOperation, GoalStartFacts, IndexBucket,
-    InferenceFinishFacts, InferenceObservation, InferenceProtocolClass, InferenceStartFacts,
-    ModelClass, PermissionDecision, PermissionFinishFacts, PermissionKind, PermissionObservation,
+    record_token_usage, start_compression, start_goal, start_hook, start_inference,
+    start_permission, start_review, start_round, start_session, start_tool, start_turn,
+    AgentModeClass, AttemptBucket, CompletionFacts, CompressionFinishFacts, CompressionObservation,
+    CompressionStartFacts, CompressionTrigger, Entrypoint, ExtensionClass, FindingBucket,
+    FinishReasonClass, GoalFinishFacts, GoalObservation, GoalOperation, GoalStartFacts,
+    HookFinishFacts, HookObservation, HookStartFacts, IndexBucket, InferenceFinishFacts,
+    InferenceObservation, InferenceProtocolClass, InferenceStartFacts, ModelClass,
+    PermissionDecision, PermissionFinishFacts, PermissionKind, PermissionObservation,
     PermissionStartFacts, PriorityClass, ProviderClass, ReviewFinishFacts, ReviewObservation,
     ReviewStage, ReviewStartFacts, RoundFinishFacts, RoundObservation, RoundStartFacts,
     SafeErrorType, ScopeClass, SessionFinishFacts, SessionKind, SessionOperation,
@@ -78,6 +79,11 @@ struct ToolState {
     permission: Option<PermissionObservation>,
 }
 
+struct HookState {
+    turn_id: String,
+    observation: HookObservation,
+}
+
 struct CompressionState {
     turn_id: String,
     observation: CompressionObservation,
@@ -106,6 +112,7 @@ struct ProjectionState {
     rounds: HashMap<String, RoundState>,
     current_round_by_turn: HashMap<String, String>,
     tools: HashMap<String, ToolState>,
+    hooks: HashMap<String, HookState>,
     compressions: HashMap<String, CompressionState>,
     goals: HashMap<String, GoalStatus>,
     reviews: HashMap<String, ReviewState>,
@@ -459,6 +466,40 @@ impl AgentTelemetrySubscriber {
                 tool_event,
                 ..
             } => self.project_tool_event(&mut state, session_id, turn_id, round_id, tool_event),
+            AgenticEvent::RuntimeHookStarted {
+                turn_id, tool_id, ..
+            } => {
+                let parent = state
+                    .tools
+                    .get(tool_id)
+                    .and_then(|tool| tool.observation.context())
+                    .or_else(|| state.turns.get(turn_id).and_then(|turn| turn.context));
+                if let Some(previous) = state.hooks.remove(tool_id) {
+                    previous.observation.finish(HookFinishFacts {
+                        completion: CompletionFacts::failed(SafeErrorType::Internal),
+                    });
+                }
+                state.hooks.insert(
+                    tool_id.clone(),
+                    HookState {
+                        turn_id: turn_id.clone(),
+                        observation: start_hook(
+                            &self.telemetry,
+                            HookStartFacts {
+                                extension_class: ExtensionClass::BuiltIn,
+                            },
+                            parent,
+                        ),
+                    },
+                );
+            }
+            AgenticEvent::RuntimeHookCompleted { tool_id, .. } => {
+                if let Some(hook) = state.hooks.remove(tool_id) {
+                    hook.observation.finish(HookFinishFacts {
+                        completion: CompletionFacts::completed(),
+                    });
+                }
+            }
             AgenticEvent::ContextCompressionStarted {
                 turn_id,
                 compression_id,
@@ -718,6 +759,9 @@ impl AgentTelemetrySubscriber {
         queue_ms: u64,
         preflight_ms: u64,
     ) {
+        if let Some(hook) = state.hooks.remove(tool_id) {
+            hook.observation.finish(HookFinishFacts { completion });
+        }
         if let Some(mut tool) = state.tools.remove(tool_id) {
             if let Some(permission) = tool.permission.take() {
                 let (permission_completion, decision) = match completion.outcome() {
@@ -890,6 +934,17 @@ impl AgentTelemetrySubscriber {
             .collect::<Vec<_>>();
         for tool_id in tool_ids {
             self.finish_tool(state, &tool_id, completion, 0, 0);
+        }
+        let hook_ids = state
+            .hooks
+            .iter()
+            .filter(|(_, hook)| hook.turn_id == turn_id)
+            .map(|(id, _)| id.clone())
+            .collect::<Vec<_>>();
+        for hook_id in hook_ids {
+            if let Some(hook) = state.hooks.remove(&hook_id) {
+                hook.observation.finish(HookFinishFacts { completion });
+            }
         }
         let compression_ids = state
             .compressions
@@ -1398,6 +1453,16 @@ mod tests {
                 timeout_seconds: None,
             },
         });
+        subscriber.project(&AgenticEvent::RuntimeHookStarted {
+            session_id: "private-session-id".to_string(),
+            turn_id: "private-turn-id".to_string(),
+            tool_id: "private-tool-id".to_string(),
+        });
+        subscriber.project(&AgenticEvent::RuntimeHookCompleted {
+            session_id: "private-session-id".to_string(),
+            turn_id: "private-turn-id".to_string(),
+            tool_id: "private-tool-id".to_string(),
+        });
         subscriber.project(&AgenticEvent::ToolEvent {
             session_id: "private-session-id".to_string(),
             turn_id: "private-turn-id".to_string(),
@@ -1440,6 +1505,7 @@ mod tests {
         assert!(span_names.contains(&"bitfun.agent.round"));
         assert!(span_names.contains(&"bitfun.inference.request"));
         assert!(span_names.contains(&"bitfun.tool.execute"));
+        assert!(span_names.contains(&"bitfun.hook.invoke"));
         let span = |name| {
             records.iter().find_map(|record| match record {
                 bitfun_observability::ValidatedRecord::Span(span) if span.name() == name => {
@@ -1452,9 +1518,11 @@ mod tests {
         let round = span("bitfun.agent.round").expect("round span");
         let inference = span("bitfun.inference.request").expect("inference span");
         let tool = span("bitfun.tool.execute").expect("tool span");
+        let hook = span("bitfun.hook.invoke").expect("hook span");
         assert_eq!(round.parent_span_id(), Some(turn.context().span_id()));
         assert_eq!(inference.parent_span_id(), Some(round.context().span_id()));
         assert_eq!(tool.parent_span_id(), Some(round.context().span_id()));
+        assert_eq!(hook.parent_span_id(), Some(tool.context().span_id()));
         assert_eq!(
             records
                 .iter()

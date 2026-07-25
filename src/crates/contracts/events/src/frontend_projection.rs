@@ -453,7 +453,9 @@ pub fn project_agentic_frontend_event(event: AgenticEvent) -> Option<AgenticFron
                 "displayContent": display_content,
             }),
         )),
-        AgenticEvent::SystemError { .. } => None,
+        AgenticEvent::RuntimeHookStarted { .. }
+        | AgenticEvent::RuntimeHookCompleted { .. }
+        | AgenticEvent::SystemError { .. } => None,
     }
 }
 

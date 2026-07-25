@@ -210,7 +210,32 @@ pub(crate) async fn call_with_tool_runtime_hooks(
     };
 
     if result.is_ok() {
-        post_call_hooks::record_successful_tool_call(tool_name, input, context);
+        let correlation = context
+            .session_id
+            .as_ref()
+            .zip(context.dialog_turn_id.as_ref())
+            .zip(context.tool_call_id.as_ref());
+        if let (Some(coordinator), Some(((session_id, turn_id), tool_id))) =
+            (get_global_coordinator(), correlation)
+        {
+            coordinator
+                .emit_event(crate::agentic::events::AgenticEvent::RuntimeHookStarted {
+                    session_id: session_id.clone(),
+                    turn_id: turn_id.clone(),
+                    tool_id: tool_id.clone(),
+                })
+                .await;
+            post_call_hooks::record_successful_tool_call(tool_name, input, context);
+            coordinator
+                .emit_event(crate::agentic::events::AgenticEvent::RuntimeHookCompleted {
+                    session_id: session_id.clone(),
+                    turn_id: turn_id.clone(),
+                    tool_id: tool_id.clone(),
+                })
+                .await;
+        } else {
+            post_call_hooks::record_successful_tool_call(tool_name, input, context);
+        }
     }
 
     result

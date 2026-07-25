@@ -192,6 +192,21 @@ pub enum AgenticEvent {
         token_details: Option<serde_json::Value>,
     },
 
+    /// Internal lifecycle fact for the currently implemented successful-tool
+    /// post-call hook. Identifiers are correlation-only and must not be
+    /// projected to product frontends or remote telemetry attributes.
+    RuntimeHookStarted {
+        session_id: String,
+        turn_id: String,
+        tool_id: String,
+    },
+
+    RuntimeHookCompleted {
+        session_id: String,
+        turn_id: String,
+        tool_id: String,
+    },
+
     ContextCompressionStarted {
         session_id: String,
         turn_id: String,
@@ -589,6 +604,8 @@ impl AgenticEvent {
             | Self::SubagentSessionLinked { session_id, .. }
             | Self::DialogTurnCompleted { session_id, .. }
             | Self::TokenUsageUpdated { session_id, .. }
+            | Self::RuntimeHookStarted { session_id, .. }
+            | Self::RuntimeHookCompleted { session_id, .. }
             | Self::ContextCompressionStarted { session_id, .. }
             | Self::ContextCompressionCompleted { session_id, .. }
             | Self::ContextCompressionFailed { session_id, .. }
@@ -630,6 +647,8 @@ impl AgenticEvent {
             | Self::ModelRoundAttemptSuperseded { .. }
             | Self::ModelRoundCompleted { .. }
             | Self::TokenUsageUpdated { .. }
+            | Self::RuntimeHookStarted { .. }
+            | Self::RuntimeHookCompleted { .. }
             | Self::DialogTurnCompleted { .. }
             | Self::ContextCompressionStarted { .. }
             | Self::ThreadGoalUpdated { .. }
