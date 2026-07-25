@@ -79,7 +79,10 @@ impl MCPServerManager {
         );
 
         let _ = self.stop_server(server_id).await;
-        match self.start_server(server_id).await {
+        match self
+            .start_server_observed(server_id, None, attempt_number)
+            .await
+        {
             Ok(_) => {
                 self.clear_reconnect_state(server_id).await;
                 info!(

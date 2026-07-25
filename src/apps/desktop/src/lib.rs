@@ -408,13 +408,14 @@ pub async fn run() {
     );
 
     let step_started = Instant::now();
-    let app_state = match AppState::new_async(token_usage_service).await {
-        Ok(state) => state,
-        Err(e) => {
-            log::error!("Failed to initialize AppState: {}", e);
-            return;
-        }
-    };
+    let app_state =
+        match AppState::new_async(token_usage_service, telemetry_runtime.telemetry()).await {
+            Ok(state) => state,
+            Err(e) => {
+                log::error!("Failed to initialize AppState: {}", e);
+                return;
+            }
+        };
     startup_timings.record_elapsed("initialize_app_state", step_started);
     startup_trace.record_elapsed_step("native_pre_tauri", "initialize_app_state", step_started);
 

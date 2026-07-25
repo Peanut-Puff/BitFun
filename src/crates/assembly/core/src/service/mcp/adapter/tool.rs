@@ -16,9 +16,15 @@ use bitfun_agent_tools::{
     render_mcp_tool_bridge_result_message, render_mcp_tool_bridge_use_message,
     validate_mcp_tool_bridge_input,
 };
+use bitfun_observability::domains::{
+    start_mcp, AttemptBucket, CompletionFacts, McpFinishFacts, McpOperation, McpStartFacts,
+    McpTransport, SafeErrorType,
+};
+use bitfun_observability::Telemetry;
 use bitfun_services_integrations::mcp::adapter::{
     render_mcp_tool_result_for_assistant, MCPDynamicToolProvider, McpDynamicToolDescriptor,
 };
+use bitfun_services_integrations::mcp::{MCPRuntimeErrorKind, MCPRuntimeResult};
 use log::{debug, error, info, warn};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashMap};
@@ -93,6 +99,8 @@ struct MCPToolWrapper {
     mcp_tool: MCPTool,
     connection: Arc<MCPConnection>,
     descriptor: McpDynamicToolDescriptor,
+    telemetry: Telemetry,
+    transport: McpTransport,
 }
 
 impl MCPToolWrapper {
@@ -103,6 +111,8 @@ impl MCPToolWrapper {
         mcp_tool: MCPTool,
         connection: Arc<MCPConnection>,
         descriptor: McpDynamicToolDescriptor,
+        telemetry: Telemetry,
+        transport: McpTransport,
     ) -> Self {
         Self {
             server_id,
@@ -111,6 +121,8 @@ impl MCPToolWrapper {
             mcp_tool,
             connection,
             descriptor,
+            telemetry,
+            transport,
         }
     }
 
@@ -269,17 +281,24 @@ impl Tool for MCPToolWrapper {
             self.tool_title(),
             self.descriptor.tool_info.server_name
         );
-        debug!(
-            "Input: {}",
-            serde_json::to_string_pretty(input).unwrap_or_else(|_| "invalid json".to_string())
-        );
-
         let start = std::time::Instant::now();
-
-        let result = self
+        let observation = start_mcp(
+            &self.telemetry,
+            McpStartFacts {
+                operation: McpOperation::CallTool,
+                transport: self.transport,
+            },
+            None,
+        );
+        let call_result = self
             .connection
             .call_tool(&self.mcp_tool.name, Some(input.clone()))
-            .await?;
+            .await;
+        observation.finish(McpFinishFacts {
+            completion: mcp_runtime_completion(&call_result),
+            attempt_bucket: AttemptBucket::One,
+        });
+        let result = call_result?;
 
         let elapsed = start.elapsed();
         debug!("MCP tool returned after {:?}", elapsed);
@@ -313,6 +332,8 @@ impl MCPToolAdapter {
         connection: Arc<MCPConnection>,
         external_workspace_scope: Option<String>,
         context_policy: Arc<MCPToolContextPolicy>,
+        telemetry: Telemetry,
+        transport: McpTransport,
     ) -> BitFunResult<()> {
         info!(
             "Loading tools from MCP server: {} (id={})",
@@ -347,6 +368,8 @@ impl MCPToolAdapter {
                 definition.mcp_tool,
                 connection.clone(),
                 definition.descriptor,
+                telemetry.clone(),
+                transport,
             ));
             self.tools.push(wrapper);
         }
@@ -366,6 +389,28 @@ impl MCPToolAdapter {
     /// Clears all tools.
     pub fn clear(&mut self) {
         self.tools.clear();
+    }
+}
+
+fn mcp_runtime_completion<T>(result: &MCPRuntimeResult<T>) -> CompletionFacts {
+    match result {
+        Ok(_) => CompletionFacts::completed(),
+        Err(error) => match error.kind() {
+            MCPRuntimeErrorKind::Timeout => CompletionFacts::timed_out(),
+            MCPRuntimeErrorKind::Configuration | MCPRuntimeErrorKind::Validation => {
+                CompletionFacts::rejected(SafeErrorType::InvalidRequest)
+            }
+            MCPRuntimeErrorKind::Io => CompletionFacts::failed(SafeErrorType::NetworkUnavailable),
+            MCPRuntimeErrorKind::MCP
+            | MCPRuntimeErrorKind::Serialization
+            | MCPRuntimeErrorKind::Deserialization => {
+                CompletionFacts::failed(SafeErrorType::NetworkProtocol)
+            }
+            MCPRuntimeErrorKind::Process
+            | MCPRuntimeErrorKind::NotFound
+            | MCPRuntimeErrorKind::NotImplemented
+            | MCPRuntimeErrorKind::Other => CompletionFacts::failed(SafeErrorType::Other),
+        },
     }
 }
 

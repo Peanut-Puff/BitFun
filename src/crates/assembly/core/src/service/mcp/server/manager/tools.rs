@@ -32,13 +32,17 @@ impl MCPServerManager {
             .get(server_id)
             .cloned();
 
-        adapter
+        let transport = self.telemetry_transport(server_id).await;
+        let observation = self.start_mcp_observation(McpOperation::ListTools, transport);
+        let load_result = adapter
             .load_tools_from_server(
                 server_id,
                 server_name,
                 connection,
                 external_workspace_scope,
                 Arc::clone(&self.tool_context_policy),
+                self.telemetry.clone(),
+                transport,
             )
             .await
             .map_err(|e| {
@@ -47,7 +51,9 @@ impl MCPServerManager {
                     server_name, server_id, e
                 );
                 e
-            })?;
+            });
+        finish_mcp_result(observation, &load_result, 1);
+        load_result?;
 
         let tools = adapter.get_tools();
         let tool_count = tools.len();

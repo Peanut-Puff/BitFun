@@ -12,6 +12,7 @@ use bitfun_core::service::remote_ssh::{
 };
 use bitfun_core::service::{announcement, config, filesystem, mcp, search, token_usage, workspace};
 use bitfun_core::util::errors::*;
+use bitfun_observability::Telemetry;
 use bitfun_services_integrations::speech::{SpeechService, SpeechStoragePaths};
 
 use serde::{Deserialize, Serialize};
@@ -94,6 +95,7 @@ pub struct AppState {
 impl AppState {
     pub async fn new_async(
         token_usage_service: Arc<token_usage::TokenUsageService>,
+        telemetry: Telemetry,
     ) -> BitFunResult<Self> {
         let start_time = std::time::Instant::now();
 
@@ -124,7 +126,7 @@ impl AppState {
 
         let agent_registry = agents::get_agent_registry();
 
-        let mcp_service = match mcp::MCPService::new(config_service.clone()) {
+        let mcp_service = match mcp::MCPService::with_telemetry(config_service.clone(), telemetry) {
             Ok(service) => {
                 log::info!("MCP service initialized successfully");
                 let service = Arc::new(service);

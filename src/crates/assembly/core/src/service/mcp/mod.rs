@@ -17,6 +17,7 @@ pub mod server;
 mod tool_info;
 mod tool_name;
 
+use bitfun_observability::Telemetry;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -53,8 +54,19 @@ impl MCPService {
     pub fn new(
         config_service: Arc<crate::service::config::ConfigService>,
     ) -> crate::util::errors::BitFunResult<Self> {
+        Self::with_telemetry(config_service, Telemetry::noop())
+    }
+
+    /// Creates an MCP service whose protocol operations use the supplied telemetry facade.
+    pub fn with_telemetry(
+        config_service: Arc<crate::service::config::ConfigService>,
+        telemetry: Telemetry,
+    ) -> crate::util::errors::BitFunResult<Self> {
         let mcp_config_service = Arc::new(MCPConfigService::new(config_service)?);
-        let server_manager = Arc::new(MCPServerManager::new(mcp_config_service.clone()));
+        let server_manager = Arc::new(MCPServerManager::with_telemetry(
+            mcp_config_service.clone(),
+            telemetry,
+        ));
         let context_provider = Arc::new(MCPContextProvider::new(server_manager.clone()));
 
         Ok(Self {

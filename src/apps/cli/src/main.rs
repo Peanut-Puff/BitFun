@@ -627,7 +627,10 @@ async fn initialize_core_services(
     // Initialize MCP service in background (non-blocking)
     if bootstrap_profile.starts_mcp() {
         if let Some(ref cfg_svc) = config_service {
-            match bitfun_core::service::mcp::MCPService::new(cfg_svc.clone()) {
+            match bitfun_core::service::mcp::MCPService::with_telemetry(
+                cfg_svc.clone(),
+                telemetry.clone(),
+            ) {
                 Ok(mcp_service) => {
                     let mcp_service = std::sync::Arc::new(mcp_service);
                     MCP_SERVICE.set(mcp_service.clone()).ok();

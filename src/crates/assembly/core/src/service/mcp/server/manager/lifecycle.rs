@@ -4,7 +4,10 @@ use bitfun_services_integrations::mcp::server::{
 };
 
 impl MCPServerManager {
-    async fn runtime_server_config(&self, server_id: &str) -> BitFunResult<MCPServerConfig> {
+    pub(super) async fn runtime_server_config(
+        &self,
+        server_id: &str,
+    ) -> BitFunResult<MCPServerConfig> {
         if let Some(config) = self.config_service.get_server_config(server_id).await? {
             return Ok(config);
         }
@@ -15,6 +18,13 @@ impl MCPServerManager {
             .ok_or_else(|| {
                 BitFunError::NotFound(format!("MCP server config not found: {}", server_id))
             })
+    }
+
+    pub(super) async fn telemetry_transport(&self, server_id: &str) -> McpTransport {
+        self.runtime_server_config(server_id)
+            .await
+            .map(|config| mcp_transport(config.resolved_transport()))
+            .unwrap_or(McpTransport::Other)
     }
 
     fn resolve_local_command(command: &str) -> BitFunResult<(String, &'static str)> {
@@ -179,10 +189,48 @@ impl MCPServerManager {
 
     /// Starts a server.
     pub async fn start_server(&self, server_id: &str) -> BitFunResult<()> {
-        self.start_server_with_external_token(server_id, None).await
+        self.start_server_observed(server_id, None, 1).await
     }
 
-    async fn start_server_with_external_token(
+    pub(super) async fn start_server_observed(
+        &self,
+        server_id: &str,
+        expected_external_start_token: Option<Arc<()>>,
+        attempt_number: u32,
+    ) -> BitFunResult<()> {
+        let transport = self.telemetry_transport(server_id).await;
+        let observation = self.start_mcp_observation(McpOperation::Connect, transport);
+        let result = self
+            .start_server_unobserved(server_id, expected_external_start_token)
+            .await;
+        finish_mcp_result(observation, &result, attempt_number);
+        result
+    }
+
+    async fn start_server_with_timeout(
+        &self,
+        server_id: &str,
+        expected_external_start_token: Arc<()>,
+        timeout: Duration,
+    ) -> BitFunResult<()> {
+        let transport = self.telemetry_transport(server_id).await;
+        let observation = self.start_mcp_observation(McpOperation::Connect, transport);
+        let result = match tokio::time::timeout(
+            timeout,
+            self.start_server_unobserved(server_id, Some(expected_external_start_token)),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(BitFunError::Timeout(
+                "External MCP server startup timed out".to_string(),
+            )),
+        };
+        finish_mcp_result(observation, &result, 1);
+        result
+    }
+
+    async fn start_server_unobserved(
         &self,
         server_id: &str,
         expected_external_start_token: Option<Arc<()>>,
@@ -376,6 +424,14 @@ impl MCPServerManager {
 
     /// Stops a server.
     pub async fn stop_server(&self, server_id: &str) -> BitFunResult<()> {
+        let transport = self.telemetry_transport(server_id).await;
+        let observation = self.start_mcp_observation(McpOperation::Disconnect, transport);
+        let result = self.stop_server_unobserved(server_id).await;
+        finish_mcp_result(observation, &result, 1);
+        result
+    }
+
+    async fn stop_server_unobserved(&self, server_id: &str) -> BitFunResult<()> {
         info!("Stopping MCP server: id={}", server_id);
 
         self.stop_connection_event_listener(server_id).await;
@@ -660,16 +716,15 @@ impl MCPServerManager {
             const EXTERNAL_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
             let manager = self.clone();
             tokio::spawn(async move {
-                let startup = tokio::time::timeout(
-                    EXTERNAL_START_TIMEOUT,
-                    manager.start_server_with_external_token(
+                let startup = manager
+                    .start_server_with_timeout(
                         &server_id,
-                        Some(Arc::clone(&start_token)),
-                    ),
-                )
-                .await;
+                        Arc::clone(&start_token),
+                        EXTERNAL_START_TIMEOUT,
+                    )
+                    .await;
                 match startup {
-                    Ok(Ok(())) => {
+                    Ok(()) => {
                         if manager
                             .external_start_token_matches(&server_id, &start_token)
                             .await
@@ -677,23 +732,18 @@ impl MCPServerManager {
                             crate::external_sources::notify_external_tool_registry_changed();
                         }
                     }
-                    Ok(Err(error)) => {
-                        warn!(
-                            "External ephemeral MCP server failed to start: id={} error={}",
-                            server_id, error
-                        );
-                        if manager
-                            .remove_ephemeral_server_for_start(&server_id, &start_token)
-                            .await
-                        {
-                            crate::external_sources::notify_external_tool_registry_changed();
+                    Err(error) => {
+                        if matches!(error, BitFunError::Timeout(_)) {
+                            warn!(
+                                "External ephemeral MCP server startup timed out: id={}",
+                                server_id
+                            );
+                        } else {
+                            warn!(
+                                "External ephemeral MCP server failed to start: id={} error={}",
+                                server_id, error
+                            );
                         }
-                    }
-                    Err(_) => {
-                        warn!(
-                            "External ephemeral MCP server startup timed out: id={}",
-                            server_id
-                        );
                         if manager
                             .remove_ephemeral_server_for_start(&server_id, &start_token)
                             .await

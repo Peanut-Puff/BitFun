@@ -21,6 +21,11 @@ use crate::service::mcp::config::MCPConfigService;
 use crate::service::mcp::protocol::{MCPError, MCPPrompt, MCPResource};
 use crate::service::workspace::get_global_workspace_service;
 use crate::util::errors::{BitFunError, BitFunResult};
+use bitfun_observability::domains::{
+    start_mcp, AttemptBucket, CompletionFacts, McpFinishFacts, McpObservation, McpOperation,
+    McpStartFacts, McpTransport, SafeErrorType,
+};
+use bitfun_observability::Telemetry;
 use bitfun_services_integrations::mcp::server::MCPConnectionEvent;
 use bitfun_services_integrations::mcp::server::MCPServerRuntimeState;
 use log::{debug, error, info, warn};
@@ -53,6 +58,7 @@ struct ActiveRemoteOAuthSession {
 #[derive(Clone)]
 pub struct MCPServerManager {
     config_service: Arc<MCPConfigService>,
+    telemetry: Telemetry,
     runtime: Arc<MCPServerRuntimeState>,
     reconnect_monitor_started: Arc<AtomicBool>,
     connection_event_tasks: Arc<tokio::sync::RwLock<HashMap<String, JoinHandle<()>>>>,
@@ -69,8 +75,13 @@ pub struct MCPServerManager {
 impl MCPServerManager {
     /// Creates a new server manager.
     pub fn new(config_service: Arc<MCPConfigService>) -> Self {
+        Self::with_telemetry(config_service, Telemetry::noop())
+    }
+
+    pub fn with_telemetry(config_service: Arc<MCPConfigService>, telemetry: Telemetry) -> Self {
         Self {
             config_service,
+            telemetry,
             runtime: Arc::new(MCPServerRuntimeState::new()),
             reconnect_monitor_started: Arc::new(AtomicBool::new(false)),
             connection_event_tasks: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
@@ -83,6 +94,21 @@ impl MCPServerManager {
             tool_context_policy: Arc::new(MCPToolContextPolicy::default()),
             ephemeral_lifecycle: Arc::new(Mutex::new(())),
         }
+    }
+
+    fn start_mcp_observation(
+        &self,
+        operation: McpOperation,
+        transport: McpTransport,
+    ) -> McpObservation {
+        start_mcp(
+            &self.telemetry,
+            McpStartFacts {
+                operation,
+                transport,
+            },
+            None,
+        )
     }
 
     pub async fn replace_external_workspace_tool_route(
@@ -144,6 +170,52 @@ impl MCPServerManager {
                 .await
                 .contains(server_id),
         )
+    }
+}
+
+fn finish_mcp_result<T>(
+    observation: McpObservation,
+    result: &BitFunResult<T>,
+    attempt_number: u32,
+) {
+    let completion = match result {
+        Ok(_) => CompletionFacts::completed(),
+        Err(BitFunError::Timeout(_)) => CompletionFacts::timed_out(),
+        Err(BitFunError::Cancelled(_)) => CompletionFacts::cancelled(),
+        Err(BitFunError::Configuration(_))
+        | Err(BitFunError::Validation(_))
+        | Err(BitFunError::NotImplemented(_)) => {
+            CompletionFacts::rejected(SafeErrorType::InvalidRequest)
+        }
+        Err(BitFunError::Io(_)) | Err(BitFunError::Http(_)) => {
+            CompletionFacts::failed(SafeErrorType::NetworkUnavailable)
+        }
+        Err(BitFunError::MCPError(_))
+        | Err(BitFunError::Serialization(_))
+        | Err(BitFunError::Deserialization(_)) => {
+            CompletionFacts::failed(SafeErrorType::NetworkProtocol)
+        }
+        Err(_) => CompletionFacts::failed(SafeErrorType::Other),
+    };
+    observation.finish(McpFinishFacts {
+        completion,
+        attempt_bucket: attempt_bucket(attempt_number),
+    });
+}
+
+fn attempt_bucket(attempt_number: u32) -> AttemptBucket {
+    match attempt_number {
+        0 | 1 => AttemptBucket::One,
+        2 => AttemptBucket::Two,
+        _ => AttemptBucket::ThreePlus,
+    }
+}
+
+fn mcp_transport(transport: super::MCPServerTransport) -> McpTransport {
+    match transport {
+        super::MCPServerTransport::Stdio => McpTransport::Stdio,
+        super::MCPServerTransport::StreamableHttp => McpTransport::StreamableHttp,
+        super::MCPServerTransport::Sse => McpTransport::Sse,
     }
 }
 

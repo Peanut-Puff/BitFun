@@ -1,6 +1,9 @@
+use bitfun_observability::domains::{start_mcp, McpOperation, McpStartFacts, McpTransport};
+use bitfun_observability::{InMemorySink, PolicySnapshot, Telemetry, TelemetryLevel};
 use bitfun_services_integrations::mcp::server::{
     compute_mcp_backoff_delay, detect_mcp_list_changed_kind, MCPListChangedKind,
 };
+use std::sync::Arc;
 use std::time::Duration;
 
 #[test]
@@ -77,4 +80,49 @@ fn superseded_external_start_token_cannot_clean_up_current_instance() {
         &first
     ));
     assert!(!super::external_start_token_is_current(None, &first));
+}
+
+#[test]
+fn mcp_terminal_facts_keep_safe_outcomes_and_retry_buckets() {
+    let sink = Arc::new(InMemorySink::default());
+    let (telemetry, _) = Telemetry::build(
+        PolicySnapshot::new(TelemetryLevel::Diagnostic)
+            .with_trace_sample_ratio(1.0)
+            .with_success_log_sample_ratio(1.0),
+        sink.clone(),
+    );
+
+    let timeout = start_mcp(
+        &telemetry,
+        McpStartFacts {
+            operation: McpOperation::Connect,
+            transport: McpTransport::StreamableHttp,
+        },
+        None,
+    );
+    let timeout_result: super::BitFunResult<()> = Err(super::BitFunError::Timeout(
+        "private endpoint timeout".to_string(),
+    ));
+    super::finish_mcp_result(timeout, &timeout_result, 2);
+
+    let cancelled = start_mcp(
+        &telemetry,
+        McpStartFacts {
+            operation: McpOperation::CallTool,
+            transport: McpTransport::Stdio,
+        },
+        None,
+    );
+    let cancelled_result: super::BitFunResult<()> = Err(super::BitFunError::Cancelled(
+        "private cancellation detail".to_string(),
+    ));
+    super::finish_mcp_result(cancelled, &cancelled_result, 3);
+
+    let encoded = serde_json::to_string(&sink.records()).expect("serialize records");
+    assert!(encoded.contains("timeout"));
+    assert!(encoded.contains("cancelled"));
+    assert!(encoded.contains("\"2\""));
+    assert!(encoded.contains("3_plus"));
+    assert!(!encoded.contains("private endpoint"));
+    assert!(!encoded.contains("private cancellation"));
 }
