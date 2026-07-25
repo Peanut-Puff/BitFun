@@ -1361,7 +1361,8 @@ export function runManifestParserSelfTest({
       rule.path === 'src/crates/execution/plugin-runtime-host/src/lib.rs' &&
       rule.patterns.some((pattern) =>
         pattern.message.includes('unexpected public PluginRuntimeHost method') &&
-        pattern.regex.test('pub fn restart(&self)') === false,
+        pattern.regex.test('pub fn restart(&self)') === false &&
+        pattern.regex.test('pub fn with_telemetry(adapter: Adapter)') === false,
       ),
   );
   if (!hasPluginRuntimeHostMethodBudgetRule) {

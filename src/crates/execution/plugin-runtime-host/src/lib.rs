@@ -3,13 +3,18 @@
 mod adapter;
 
 use async_trait::async_trait;
+use bitfun_observability::domains::{
+    start_plugin, CompletionFacts, ExtensionClass, PluginFinishFacts, PluginOperation,
+    PluginStartFacts, SafeErrorType,
+};
+use bitfun_observability::Telemetry;
 use bitfun_runtime_ports::{
     validate_plugin_dispatch_response, validate_plugin_runtime_read_response, PluginAuditRef,
     PluginDiagnostic, PluginDiagnosticDetail, PluginDiagnosticSeverity, PluginDispatchEnvelope,
     PluginHostLifecyclePhase, PluginQuarantineClearCondition, PluginQuarantineReason,
     PluginQuarantineScope, PluginQuarantineState, PluginResponseEnvelope,
     PluginRuntimeAvailability, PluginRuntimeClient, PluginRuntimeReadRequest,
-    PluginRuntimeReadResponse, PluginRuntimeUnavailableReason, PluginStatusKind,
+    PluginRuntimeReadResponse, PluginRuntimeUnavailableReason, PluginSourceKind, PluginStatusKind,
     PluginStatusSnapshot, PortError, PortErrorKind, PortResult,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -24,6 +29,8 @@ const MAX_CACHED_DISPATCHES: usize = 256;
 #[derive(Clone)]
 pub struct PluginRuntimeHost {
     adapter: Arc<dyn PluginHostAdapter>,
+    telemetry: Telemetry,
+    extension_class: ExtensionClass,
     clock: HostClock,
     dispatch_locks: Arc<Mutex<HashMap<PluginDispatchLockKey, Arc<tokio::sync::Mutex<()>>>>>,
     state: Arc<Mutex<PluginRuntimeHostState>>,
@@ -200,15 +207,30 @@ struct StoredQuarantine {
 
 impl PluginRuntimeHost {
     pub fn new(adapter: Arc<dyn PluginHostAdapter>) -> Self {
-        Self::with_clock(adapter, current_unix_ms)
+        Self::with_telemetry(adapter, Telemetry::noop(), ExtensionClass::Custom)
     }
 
-    fn with_clock<F>(adapter: Arc<dyn PluginHostAdapter>, clock: F) -> Self
+    pub fn with_telemetry(
+        adapter: Arc<dyn PluginHostAdapter>,
+        telemetry: Telemetry,
+        extension_class: ExtensionClass,
+    ) -> Self {
+        Self::with_clock(adapter, telemetry, extension_class, current_unix_ms)
+    }
+
+    fn with_clock<F>(
+        adapter: Arc<dyn PluginHostAdapter>,
+        telemetry: Telemetry,
+        extension_class: ExtensionClass,
+        clock: F,
+    ) -> Self
     where
         F: Fn() -> u64 + Send + Sync + 'static,
     {
         Self {
             adapter,
+            telemetry,
+            extension_class,
             clock: Arc::new(clock),
             dispatch_locks: Arc::new(Mutex::new(HashMap::new())),
             state: Arc::new(Mutex::new(PluginRuntimeHostState::default())),
@@ -630,46 +652,69 @@ impl PluginRuntimeClient for PluginRuntimeHost {
         &self,
         request: PluginRuntimeReadRequest,
     ) -> PortResult<PluginRuntimeReadResponse> {
-        let domain = ExecutionDomainKey::from_read_request(&request);
-        if self.is_domain_disposed(&domain) {
-            return Err(PortError::new(
-                PortErrorKind::NotAvailable,
-                format!(
-                    "plugin runtime host project workspace is disposed: {}/{}",
-                    request.project_domain_id, request.workspace_id
-                ),
-            ));
-        }
+        let observation = start_plugin(
+            &self.telemetry,
+            PluginStartFacts {
+                operation: PluginOperation::Discover,
+                extension_class: self.extension_class,
+            },
+            None,
+        );
+        let result = async {
+            let domain = ExecutionDomainKey::from_read_request(&request);
+            if self.is_domain_disposed(&domain) {
+                return Err(PortError::new(
+                    PortErrorKind::NotAvailable,
+                    format!(
+                        "plugin runtime host project workspace is disposed: {}/{}",
+                        request.project_domain_id, request.workspace_id
+                    ),
+                ));
+            }
 
-        let mut response = self.adapter.read_plugins(request.clone()).await?;
-        validate_plugin_runtime_read_response(&request, &response)?;
-        if !request.plugin_ids.is_empty() {
-            response
-                .sources
-                .retain(|source| request.plugin_ids.contains(&source.plugin_id));
-            response
-                .plugin_statuses
-                .retain(|status| request.plugin_ids.contains(&status.source.plugin_id));
-        }
-        response.diagnostics.retain(|diagnostic| {
-            response
-                .sources
-                .iter()
-                .any(|source| source == &diagnostic.source)
-                || response
+            let mut response = self.adapter.read_plugins(request.clone()).await?;
+            validate_plugin_runtime_read_response(&request, &response)?;
+            if !request.plugin_ids.is_empty() {
+                response
+                    .sources
+                    .retain(|source| request.plugin_ids.contains(&source.plugin_id));
+                response
                     .plugin_statuses
+                    .retain(|status| request.plugin_ids.contains(&status.source.plugin_id));
+            }
+            response.diagnostics.retain(|diagnostic| {
+                response
+                    .sources
                     .iter()
-                    .any(|status| status.source == diagnostic.source)
+                    .any(|source| source == &diagnostic.source)
+                    || response
+                        .plugin_statuses
+                        .iter()
+                        .any(|status| status.source == diagnostic.source)
+            });
+            self.overlay_host_quarantines(&request, &mut response);
+            validate_plugin_runtime_read_response(&request, &response)?;
+            Ok(response)
+        }
+        .await;
+        observation.finish(PluginFinishFacts {
+            completion: plugin_read_completion(&result),
         });
-        self.overlay_host_quarantines(&request, &mut response);
-        validate_plugin_runtime_read_response(&request, &response)?;
-        Ok(response)
+        result
     }
 
     async fn dispatch(
         &self,
         envelope: PluginDispatchEnvelope,
     ) -> PortResult<PluginResponseEnvelope> {
+        let observation = start_plugin(
+            &self.telemetry,
+            PluginStartFacts {
+                operation: PluginOperation::Invoke,
+                extension_class: extension_class(envelope.source.source_kind),
+            },
+            None,
+        );
         let lock_key = PluginDispatchLockKey::from_envelope(&envelope);
         let dispatch_lock = self.dispatch_lock(&lock_key);
         let result = {
@@ -677,7 +722,69 @@ impl PluginRuntimeClient for PluginRuntimeHost {
             self.dispatch_locked(envelope).await
         };
         self.release_dispatch_lock(&lock_key, &dispatch_lock);
+        observation.finish(PluginFinishFacts {
+            completion: plugin_dispatch_completion(&result),
+        });
         result
+    }
+}
+
+fn extension_class(source_kind: PluginSourceKind) -> ExtensionClass {
+    match source_kind {
+        PluginSourceKind::BitFunNative => ExtensionClass::BuiltIn,
+        PluginSourceKind::OpenCodeCompatible | PluginSourceKind::RemoteRegistry => {
+            ExtensionClass::Managed
+        }
+        PluginSourceKind::LocalPath => ExtensionClass::Project,
+        _ => ExtensionClass::Custom,
+    }
+}
+
+fn plugin_read_completion(result: &PortResult<PluginRuntimeReadResponse>) -> CompletionFacts {
+    match result {
+        Ok(response)
+            if response
+                .plugin_statuses
+                .iter()
+                .any(|status| status.status == PluginStatusKind::Quarantined) =>
+        {
+            CompletionFacts::failed(SafeErrorType::Other)
+        }
+        Ok(response)
+            if response.plugin_statuses.iter().any(|status| {
+                matches!(
+                    status.status,
+                    PluginStatusKind::InvalidConfig | PluginStatusKind::Unavailable
+                )
+            }) =>
+        {
+            CompletionFacts::degraded(SafeErrorType::Other)
+        }
+        Ok(_) => CompletionFacts::completed(),
+        Err(error) => port_error_completion(error),
+    }
+}
+
+fn plugin_dispatch_completion(result: &PortResult<PluginResponseEnvelope>) -> CompletionFacts {
+    match result {
+        Ok(response) => match response.quarantine.as_ref().map(|state| state.reason) {
+            Some(PluginQuarantineReason::DeadlineExceeded) => CompletionFacts::timed_out(),
+            Some(_) => CompletionFacts::failed(SafeErrorType::Other),
+            None => CompletionFacts::completed(),
+        },
+        Err(error) => port_error_completion(error),
+    }
+}
+
+fn port_error_completion(error: &PortError) -> CompletionFacts {
+    match &error.kind {
+        PortErrorKind::Cancelled => CompletionFacts::cancelled(),
+        PortErrorKind::Timeout => CompletionFacts::timed_out(),
+        PortErrorKind::PermissionDenied => {
+            CompletionFacts::rejected(SafeErrorType::PermissionDenied)
+        }
+        PortErrorKind::InvalidRequest => CompletionFacts::failed(SafeErrorType::InvalidRequest),
+        _ => CompletionFacts::failed(SafeErrorType::Other),
     }
 }
 

@@ -1,4 +1,6 @@
 use async_trait::async_trait;
+use bitfun_observability::domains::ExtensionClass;
+use bitfun_observability::{InMemorySink, PolicySnapshot, Telemetry, TelemetryLevel};
 use bitfun_plugin_runtime_host::{PluginHostAdapter, PluginRuntimeHost};
 use bitfun_runtime_ports::{
     PermissionPromptDenyState, PermissionPromptDescriptor, PermissionPromptEffectKind,
@@ -410,6 +412,17 @@ fn envelope(id: &str) -> PluginDispatchEnvelope {
     }
 }
 
+fn read_request(id: &str) -> PluginRuntimeReadRequest {
+    PluginRuntimeReadRequest {
+        request_id: id.to_string(),
+        project_domain_id: "project-1".to_string(),
+        workspace_id: "workspace-1".to_string(),
+        plugin_ids: Vec::new(),
+        include_config_validation: true,
+        epochs: epochs(),
+    }
+}
+
 fn scoped_status(
     project_domain_id: &str,
     workspace_id: &str,
@@ -463,6 +476,41 @@ async fn host_dispatches_candidates() {
     assert_eq!(response.effects.len(), 1);
     assert_eq!(response.adapter_id, "opencode-compatible");
     assert_eq!(adapter.calls.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn host_projects_discover_and_invoke_without_plugin_identity() {
+    let sink = Arc::new(InMemorySink::default());
+    let (telemetry, _) = Telemetry::build(
+        PolicySnapshot::new(TelemetryLevel::Diagnostic)
+            .with_trace_sample_ratio(1.0)
+            .with_success_log_sample_ratio(1.0),
+        sink.clone(),
+    );
+    let host = PluginRuntimeHost::with_telemetry(
+        Arc::new(CountingAdapter::default()),
+        telemetry,
+        ExtensionClass::Managed,
+    );
+
+    host.read_plugins(read_request("private-read-id"))
+        .await
+        .expect("discover plugins");
+    host.dispatch(envelope("private-event-id"))
+        .await
+        .expect("invoke plugin");
+
+    let records = sink.records();
+    let encoded = format!("{records:?}");
+    assert!(records
+        .iter()
+        .any(|record| record.name() == "bitfun.plugin.lifecycle"));
+    assert!(encoded.contains("discover"));
+    assert!(encoded.contains("invoke"));
+    assert!(!encoded.contains("opencode.example"));
+    assert!(!encoded.contains("file:///plugins"));
+    assert!(!encoded.contains("private-event-id"));
+    assert!(!encoded.contains("private-read-id"));
 }
 
 #[tokio::test]

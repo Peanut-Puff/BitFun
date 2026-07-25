@@ -19,7 +19,7 @@ export const forbiddenContentRules = [
     patterns: [
       {
         regex:
-          /\bpub\s+(?:async\s+)?fn\s+(?!(?:new|dispose_project|restart)\b)[A-Za-z_][A-Za-z0-9_]*\b/,
+          /\bpub\s+(?:async\s+)?fn\s+(?!(?:new|with_telemetry|dispose_project|restart)\b)[A-Za-z_][A-Za-z0-9_]*\b/,
         message:
           'unexpected public PluginRuntimeHost method; update the reviewed method budget before exposing more Host API',
       },
