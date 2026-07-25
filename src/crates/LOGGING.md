@@ -103,3 +103,65 @@ Remote log rules:
    turn, goal, installation, or business IDs are not log attributes.
 7. Adding a remote event requires typed facts, a static descriptor, a named
    owner and consumer, a cardinality budget, and privacy contract coverage.
+
+## Remote OTel Log Catalog
+
+Remote OTel Logs report operation results that are useful for product
+reliability, latency, and failure analysis. They do not report arbitrary local
+messages. A typed operation emits one completion log when its descriptor and
+telemetry policy allow it; the same typed facts also produce the matching trace
+and metrics.
+
+| Scope | OTel event names | Sent result |
+|---|---|---|
+| Application and agent lifecycle | `bitfun.app.lifecycle`, `bitfun.session.lifecycle`, `bitfun.agent.turn`, `bitfun.agent.round`, `bitfun.inference.request` | Entrypoint or bounded operation class, outcome, duration, safe error type, and registered count/bucket fields |
+| Execution controls | `bitfun.tool.execution`, `bitfun.permission.decision`, `bitfun.context.operation` | Bounded tool category, permission decision class, compaction class, outcome, duration, and safe error type |
+| Product workflows | `bitfun.goal.lifecycle`, `bitfun.deep_review.lifecycle` | Bounded operation/stage class, outcome, duration, and aggregate counts; never goal text, review content, or findings |
+| Extensions and protocols | `bitfun.extension.invocation`, `bitfun.extension.lifecycle`, `bitfun.protocol.operation`, `bitfun.remote.operation` | Extension class, protocol/transport class, attempt bucket, outcome, duration, and safe error type; never names, payloads, endpoints, or paths |
+
+Successful high-frequency events may be sampled. Failed, timed-out, cancelled,
+rejected, blocked, and degraded terminal results are retained by the sampling
+policy, subject only to the bounded queue and rate limits. Do not create remote
+OTel Logs for ordinary cache hits, polling ticks, text chunks, terminal output,
+file-watch callbacks, UI renders, or debug probes.
+
+## Retention And Access
+
+The client does not create a second on-disk copy of remote OTel Logs. Before
+export, records exist only in the telemetry runtime's bounded memory queue. When
+telemetry is disabled, pending records are discarded and no new remote records
+are accepted.
+
+The receiving deployment must apply these defaults unless a stricter product or
+legal policy is configured:
+
+| Data | Maximum raw retention | Access |
+|---|---|---|
+| Basic OTel Logs | 30 days | Named telemetry/reliability operators |
+| Diagnostic OTel Logs | 7 days | Time-bound diagnostic access with audit records |
+| Aggregates derived from logs | 90 days | Product and reliability owners; no raw attributes added during aggregation |
+
+Backend deletion must remove expired raw records and honor installation-level
+deletion requests where the deployment supports them. Export endpoints,
+credentials, access policy, and retention are deployment configuration, not
+business-event attributes.
+
+Local log retention remains an app-host concern. Use bounded rotation and avoid
+indefinite retention. Local support bundles require an explicit user action and
+must not be uploaded through the telemetry exporter.
+
+## Adding Or Changing Logs
+
+For a local diagnostic log, first confirm that the message is needed to diagnose
+a concrete condition. Choose the lowest useful level, keep the message static,
+and include only the minimum safe context. Never log request/response bodies,
+prompts, tool or MCP payloads, terminal content, credentials, or environment
+values, even at `TRACE`.
+
+For a remote OTel Log, do not call an exporter or construct a `LogRecord` in the
+business module. Add or reuse a typed fact in `bitfun-observability::domains`,
+register its static schema and owner, and finish it at the operation's real
+terminal state. Cover success and every terminal state the owner can actually
+produce, including timeout and cancellation where applicable. Tests must prove
+the stable event name, bounded fields, trace correlation when present, and
+absence of raw identifiers, paths, payloads, and error messages.

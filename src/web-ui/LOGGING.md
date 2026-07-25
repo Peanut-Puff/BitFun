@@ -122,3 +122,16 @@ DOM content, prompts, model output, tool payloads, paths, URLs, account/device
 identity, raw errors, or stacks. Trace context may be passed only through a
 versioned trusted BitFun bridge contract, never through arbitrary third-party
 requests.
+
+## Adding Or Changing Frontend Logs
+
+Add a frontend log only for a concrete local diagnostic need. Keep the message
+static, select the lowest useful level, and pass a small structured object whose
+fields have been checked for prompts, model output, tool payloads, terminal
+content, credentials, account/device identity, paths, and URLs. Do not log
+component props or application state objects wholesale.
+
+Frontend logs use the host's bounded local retention and rotation policy. A
+support bundle or upload requires a separate explicit user action. Adding a
+frontend log never authorizes remote export; remote browser telemetry requires a
+typed bridge contract and the same schema/privacy tests as backend telemetry.
