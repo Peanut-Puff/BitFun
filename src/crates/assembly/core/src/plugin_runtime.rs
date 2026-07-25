@@ -5,6 +5,11 @@
 //! surfaces; it does not register tools or execute plugin code.
 
 use async_trait::async_trait;
+use bitfun_observability::domains::{
+    start_plugin, CompletionFacts, ExtensionClass, PluginFinishFacts, PluginOperation,
+    PluginStartFacts, SafeErrorType,
+};
+use bitfun_observability::Telemetry;
 use bitfun_opencode_adapter::load_opencode_package_adapter;
 use bitfun_plugin_runtime_host::PluginRuntimeHost;
 use bitfun_product_domains::plugin_source::{
@@ -76,44 +81,86 @@ pub enum ManagedPluginDeactivationResult {
 pub async fn preview_managed_plugin_activation(
     workspace: &Path,
     package_id: &str,
+    telemetry: &Telemetry,
 ) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
-    let service = Arc::new(crate::plugin_source::managed_plugin_source_service(
-        workspace,
-    )?);
-    preview_with_service(service, workspace, package_id).await
+    let observation = start_managed_plugin_operation(telemetry, PluginOperation::Load);
+    let result = async {
+        let service = Arc::new(crate::plugin_source::managed_plugin_source_service(
+            workspace,
+        )?);
+        preview_with_service_observed(service, workspace, package_id, Some(telemetry)).await
+    }
+    .await;
+    finish_managed_plugin_operation(observation, &result);
+    result
 }
 
 pub async fn activate_managed_plugin(
     workspace: &Path,
     package_id: &str,
     expected_content_hash: Option<&str>,
+    telemetry: &Telemetry,
 ) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
-    let service = Arc::new(crate::plugin_source::managed_plugin_source_service(
-        workspace,
-    )?);
-    activate_with_service(service, workspace, package_id, expected_content_hash).await
+    let observation = start_managed_plugin_operation(telemetry, PluginOperation::Load);
+    let result = async {
+        let service = Arc::new(crate::plugin_source::managed_plugin_source_service(
+            workspace,
+        )?);
+        activate_with_service_observed(
+            service,
+            workspace,
+            package_id,
+            expected_content_hash,
+            Some(telemetry),
+        )
+        .await
+    }
+    .await;
+    finish_managed_plugin_operation(observation, &result);
+    result
 }
 
 pub async fn deactivate_managed_plugin(
     workspace: &Path,
     package_id: &str,
+    telemetry: &Telemetry,
 ) -> Result<ManagedPluginDeactivationResult, ManagedPluginSourceError> {
-    let service = Arc::new(crate::plugin_source::managed_plugin_source_service(
-        workspace,
-    )?);
-    deactivate_with_service(service, workspace, package_id).await
+    let observation = start_managed_plugin_operation(telemetry, PluginOperation::Unload);
+    let result = async {
+        let service = Arc::new(crate::plugin_source::managed_plugin_source_service(
+            workspace,
+        )?);
+        deactivate_with_service(service, workspace, package_id).await
+    }
+    .await;
+    finish_managed_plugin_operation(observation, &result);
+    result
 }
 
+#[cfg(test)]
 async fn preview_with_service(
     service: Arc<ManagedPluginSourceService>,
     workspace: &Path,
     package_id: &str,
 ) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
+    preview_with_service_observed(service, workspace, package_id, None).await
+}
+
+async fn preview_with_service_observed(
+    service: Arc<ManagedPluginSourceService>,
+    workspace: &Path,
+    package_id: &str,
+    telemetry: Option<&Telemetry>,
+) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
     let input = service.load_package(workspace, package_id).await?;
     let source = input.clone().into_parts().1;
     let (adapter, dispatch_targets) = load_opencode_package_adapter(input, None, current_time_ms())
         .map_err(|error| invalid_package(package_id, error.to_string()))?;
-    let binding = PluginRuntimeBinding::client(Arc::new(PluginRuntimeHost::new(adapter)));
+    let binding = PluginRuntimeBinding::client(Arc::new(PluginRuntimeHost::with_telemetry(
+        adapter,
+        telemetry.cloned().unwrap_or_default(),
+        ExtensionClass::Managed,
+    )));
     let response = binding
         .as_client()
         .read_plugins(read_request(PREVIEW_PROJECT_ID, PREVIEW_WORKSPACE_ID, 1))
@@ -130,11 +177,23 @@ async fn preview_with_service(
     ))
 }
 
+#[cfg(test)]
 async fn activate_with_service(
     service: Arc<ManagedPluginSourceService>,
     workspace: &Path,
     package_id: &str,
     expected_content_hash: Option<&str>,
+) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
+    activate_with_service_observed(service, workspace, package_id, expected_content_hash, None)
+        .await
+}
+
+async fn activate_with_service_observed(
+    service: Arc<ManagedPluginSourceService>,
+    workspace: &Path,
+    package_id: &str,
+    expected_content_hash: Option<&str>,
+    telemetry: Option<&Telemetry>,
 ) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
     let expected_content_hash = expected_content_hash.ok_or_else(|| {
         invalid_package(
@@ -142,7 +201,9 @@ async fn activate_with_service(
             "activation requires the exact content hash from the preview".to_string(),
         )
     })?;
-    let preview = preview_with_service(Arc::clone(&service), workspace, package_id).await?;
+    let preview =
+        preview_with_service_observed(Arc::clone(&service), workspace, package_id, telemetry)
+            .await?;
     if preview.content_hash != expected_content_hash {
         return Err(invalid_package(
             package_id,
@@ -182,6 +243,7 @@ async fn activate_with_service(
             input,
             authority,
             activation_diagnostics,
+            telemetry,
         )
         .await
     }
@@ -245,11 +307,13 @@ async fn project_activated(
     input: PluginPackageInput,
     authority: PluginActivationAuthority,
     initial_diagnostics: Vec<String>,
+    telemetry: Option<&Telemetry>,
 ) -> Result<ManagedPluginActivationView, ManagedPluginSourceError> {
     let (project_domain_id, workspace_id, source, activation_epoch) =
         authority.clone().into_parts();
-    let (binding, dispatch_targets) =
-        activated_binding(service, workspace, package_id, input, authority)?;
+    let (binding, dispatch_targets) = activated_binding_with_telemetry(
+        service, workspace, package_id, input, authority, telemetry,
+    )?;
     let client = binding.as_client();
     let read = client
         .read_plugins(read_request(
@@ -314,6 +378,7 @@ fn preview_candidates(
         .collect()
 }
 
+#[cfg(test)]
 fn activated_binding(
     service: Arc<ManagedPluginSourceService>,
     workspace: &Path,
@@ -321,10 +386,25 @@ fn activated_binding(
     input: PluginPackageInput,
     authority: PluginActivationAuthority,
 ) -> Result<(PluginRuntimeBinding, Vec<PluginDispatchTarget>), ManagedPluginSourceError> {
+    activated_binding_with_telemetry(service, workspace, package_id, input, authority, None)
+}
+
+fn activated_binding_with_telemetry(
+    service: Arc<ManagedPluginSourceService>,
+    workspace: &Path,
+    package_id: &str,
+    input: PluginPackageInput,
+    authority: PluginActivationAuthority,
+    telemetry: Option<&Telemetry>,
+) -> Result<(PluginRuntimeBinding, Vec<PluginDispatchTarget>), ManagedPluginSourceError> {
     let (adapter, dispatch_targets) =
         load_opencode_package_adapter(input, Some(authority.clone()), current_time_ms())
             .map_err(|error| invalid_package(package_id, error.to_string()))?;
-    let host: Arc<dyn PluginRuntimeClient> = Arc::new(PluginRuntimeHost::new(adapter));
+    let host: Arc<dyn PluginRuntimeClient> = Arc::new(PluginRuntimeHost::with_telemetry(
+        adapter,
+        telemetry.cloned().unwrap_or_default(),
+        ExtensionClass::Managed,
+    ));
     Ok((
         PluginRuntimeBinding::client(Arc::new(ActivationGatedPluginRuntimeClient {
             inner: host,
@@ -464,6 +544,41 @@ fn unavailable(package_id: &str, diagnostic: String) -> ManagedPluginSourceError
         package_id: package_id.to_string(),
         diagnostic,
     }
+}
+
+fn start_managed_plugin_operation(
+    telemetry: &Telemetry,
+    operation: PluginOperation,
+) -> bitfun_observability::domains::PluginObservation {
+    start_plugin(
+        telemetry,
+        PluginStartFacts {
+            operation,
+            extension_class: ExtensionClass::Managed,
+        },
+        None,
+    )
+}
+
+fn finish_managed_plugin_operation<T>(
+    observation: bitfun_observability::domains::PluginObservation,
+    result: &Result<T, ManagedPluginSourceError>,
+) {
+    let completion = match result {
+        Ok(_) => CompletionFacts::completed(),
+        Err(ManagedPluginSourceError::PackageInvalid { .. }) => {
+            CompletionFacts::failed(SafeErrorType::InvalidRequest)
+        }
+        Err(ManagedPluginSourceError::DeactivationPersistenceUncertain { .. })
+        | Err(ManagedPluginSourceError::TrustStore(_)) => {
+            CompletionFacts::failed(SafeErrorType::Persistence)
+        }
+        Err(ManagedPluginSourceError::PackageNotFound(_))
+        | Err(ManagedPluginSourceError::TemporarilyUnavailable { .. }) => {
+            CompletionFacts::failed(SafeErrorType::Other)
+        }
+    };
+    observation.finish(PluginFinishFacts { completion });
 }
 
 fn current_time_ms() -> u64 {

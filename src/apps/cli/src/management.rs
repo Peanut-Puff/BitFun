@@ -18,6 +18,7 @@ use bitfun_core::product_assembly::ProductRuntimeParts;
 use bitfun_core::runtime_ports::PluginRuntimeAvailability;
 use bitfun_core::service::config::initialize_global_config;
 use bitfun_core::service::session_usage::render_usage_report_markdown;
+use bitfun_observability::Telemetry;
 
 async fn ensure_global_config_service(
 ) -> Result<std::sync::Arc<bitfun_core::service::config::ConfigService>> {
@@ -339,12 +340,16 @@ pub(crate) async fn set_plugin_trust(
     Ok(())
 }
 
-pub(crate) async fn activate_plugin(package_id: &str, confirm: Option<&str>) -> Result<()> {
+pub(crate) async fn activate_plugin(
+    package_id: &str,
+    confirm: Option<&str>,
+    telemetry: &Telemetry,
+) -> Result<()> {
     let workspace = std::env::current_dir().context("Failed to resolve current directory")?;
     let view = if let Some(content_hash) = confirm {
-        activate_managed_plugin(&workspace, package_id, Some(content_hash)).await
+        activate_managed_plugin(&workspace, package_id, Some(content_hash), telemetry).await
     } else {
-        preview_managed_plugin_activation(&workspace, package_id).await
+        preview_managed_plugin_activation(&workspace, package_id, telemetry).await
     }
     .map_err(|error| {
         let diagnostic = crate::plugin_diagnostics::escape_terminal_text(&error.to_string());
@@ -371,9 +376,9 @@ pub(crate) async fn activate_plugin(package_id: &str, confirm: Option<&str>) -> 
     Ok(())
 }
 
-pub(crate) async fn deactivate_plugin(package_id: &str) -> Result<()> {
+pub(crate) async fn deactivate_plugin(package_id: &str, telemetry: &Telemetry) -> Result<()> {
     let workspace = std::env::current_dir().context("Failed to resolve current directory")?;
-    let result = deactivate_managed_plugin(&workspace, package_id)
+    let result = deactivate_managed_plugin(&workspace, package_id, telemetry)
         .await
         .map_err(|error| {
             let diagnostic = crate::plugin_diagnostics::escape_terminal_text(&error.to_string());

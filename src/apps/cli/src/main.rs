@@ -979,10 +979,10 @@ async fn run_cli() -> Result<()> {
                 package_id,
                 confirm,
             }) => {
-                management::activate_plugin(&package_id, confirm.as_deref()).await?;
+                management::activate_plugin(&package_id, confirm.as_deref(), &telemetry).await?;
             }
             Some(PluginAction::Deactivate { package_id }) => {
-                management::deactivate_plugin(&package_id).await?;
+                management::deactivate_plugin(&package_id, &telemetry).await?;
             }
         },
 
