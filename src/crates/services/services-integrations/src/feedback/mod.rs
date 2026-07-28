@@ -1,3 +1,4 @@
+mod message_cache;
 mod service;
 mod vault;
 

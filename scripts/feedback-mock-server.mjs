@@ -21,6 +21,12 @@ const server = http.createServer(async (request, response) => {
     if (Number.isInteger(body.seed_inbox) && body.seed_inbox > 0) {
       seedInbox(Math.min(body.seed_inbox, 120));
     }
+    if (body.admin_reply && typeof body.admin_reply.feedback_id === 'string') {
+      addAdminReply(body.admin_reply.feedback_id, body.admin_reply.content ?? 'Mock support reply');
+    }
+    if (body.seed_messages && typeof body.seed_messages.feedback_id === 'string') {
+      seedMessages(body.seed_messages.feedback_id, Math.min(body.seed_messages.count ?? 0, 250));
+    }
     return send(response, 200, { next_fault: nextFault, records: records.size }, requestId);
   }
 
@@ -34,6 +40,7 @@ const server = http.createServer(async (request, response) => {
   if (fault === '5xx') return sendError(response, 503, 'INTERNAL_ERROR', requestId);
   if (fault === '401') return sendError(response, 401, 'ACCESS_TOKEN_INVALID', requestId);
   if (fault === 'cursor_invalid') return sendError(response, 400, 'CURSOR_INVALID', requestId);
+  if (fault === 'capability_invalid') return sendError(response, 403, 'CAPABILITY_INVALID', requestId);
 
   if (request.method === 'POST' && url.pathname === '/auth/v1/anonymous/enroll') {
     const body = await readJson(request);
@@ -102,6 +109,13 @@ const server = http.createServer(async (request, response) => {
       has_new_reply: false,
       created_at: createdAt,
       updated_at: createdAt,
+      read_cursor: createdAt,
+      messages: [{
+        message_id: randomUUID(),
+        sender_type: 'user',
+        content: body.content.trim(),
+        created_at: createdAt,
+      }],
     });
     return send(response, 201, result, requestId, { 'Idempotency-Replayed': 'false' });
   }
@@ -127,6 +141,49 @@ const server = http.createServer(async (request, response) => {
       })),
       cursor: encodeCursor(nextOffset),
       has_more: nextOffset < ordered.length,
+    }, requestId);
+  }
+
+  const messagesMatch = /^\/support\/v1\/feedback\/([^/]+)\/messages$/.exec(url.pathname);
+  if (request.method === 'GET' && messagesMatch) {
+    const record = authorizeRecord(request, response, requestId, messagesMatch[1]);
+    if (!record) return;
+    const limit = parseLimit(url.searchParams.get('limit'), 50, 200);
+    if (limit === null) return sendError(response, 400, 'PAGE_SIZE_INVALID', requestId);
+    const offset = decodeCursor(url.searchParams.get('cursor'), 'messages');
+    if (offset === null) return sendError(response, 400, 'CURSOR_INVALID', requestId);
+    const page = record.messages.slice(offset, offset + limit);
+    const nextOffset = offset + page.length;
+    return send(response, 200, {
+      feedback_id: record.feedback_id,
+      messages: page,
+      cursor: encodeCursor(nextOffset, 'messages'),
+      has_more: nextOffset < record.messages.length,
+    }, requestId);
+  }
+
+  const ackMatch = /^\/support\/v1\/feedback\/([^/]+)\/ack$/.exec(url.pathname);
+  if (request.method === 'POST' && ackMatch) {
+    const record = authorizeRecord(request, response, requestId, ackMatch[1]);
+    if (!record) return;
+    const body = await readJson(request);
+    const requested = Date.parse(body.read_cursor);
+    if (!Number.isFinite(requested)) return sendError(response, 400, 'READ_CURSOR_INVALID', requestId);
+    const latest = record.messages.at(-1)?.created_at ?? record.created_at;
+    const effective = new Date(Math.max(
+      Date.parse(record.read_cursor ?? record.created_at),
+      Math.min(requested, Date.parse(latest)),
+    )).toISOString();
+    record.read_cursor = effective;
+    if (record.status === 'waiting_user' && Date.parse(effective) >= Date.parse(latest)) {
+      record.status = 'in_progress';
+    }
+    record.has_new_reply = record.messages.some(message =>
+      message.sender_type === 'admin' && Date.parse(message.created_at) > Date.parse(effective));
+    return send(response, 200, {
+      feedback_id: record.feedback_id,
+      read_cursor: effective,
+      feedback_status: record.status,
     }, requestId);
   }
 
@@ -170,19 +227,69 @@ function parseLimit(value, fallback, maximum) {
   return Number.isInteger(parsed) && parsed >= 1 && parsed <= maximum ? parsed : null;
 }
 
-function encodeCursor(offset) {
-  return Buffer.from(`inbox:${offset}`, 'utf8').toString('base64url');
+function encodeCursor(offset, kind = 'inbox') {
+  return Buffer.from(`${kind}:${offset}`, 'utf8').toString('base64url');
 }
 
-function decodeCursor(cursor) {
+function decodeCursor(cursor, kind = 'inbox') {
   if (cursor === null) return 0;
   try {
     const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
-    const match = /^inbox:(\d+)$/.exec(decoded);
+    const match = new RegExp(`^${kind}:(\\d+)$`).exec(decoded);
     return match ? Number.parseInt(match[1], 10) : null;
   } catch {
     return null;
   }
+}
+
+function authorizeRecord(request, response, requestId, feedbackId) {
+  if (!validBearer(request)) {
+    sendError(response, 401, 'ACCESS_TOKEN_INVALID', requestId);
+    return null;
+  }
+  const record = records.get(feedbackId);
+  if (!record) {
+    sendError(response, 404, 'FEEDBACK_NOT_FOUND', requestId);
+    return null;
+  }
+  if (!record.capability_token
+    || header(request, 'x-feedback-capability') !== record.capability_token) {
+    sendError(response, 403, 'CAPABILITY_INVALID', requestId);
+    return null;
+  }
+  return record;
+}
+
+function addAdminReply(feedbackId, content) {
+  const record = records.get(feedbackId);
+  if (!record || !Array.isArray(record.messages)) return;
+  const createdAt = new Date(Date.now() + record.messages.length).toISOString();
+  record.messages.push({
+    message_id: randomUUID(),
+    sender_type: 'admin',
+    content: String(content),
+    created_at: createdAt,
+  });
+  record.status = 'waiting_user';
+  record.has_new_reply = true;
+  record.updated_at = createdAt;
+}
+
+function seedMessages(feedbackId, count) {
+  const record = records.get(feedbackId);
+  if (!record || !Array.isArray(record.messages) || count <= 0) return;
+  for (let index = 0; index < count; index += 1) {
+    const createdAt = new Date(Date.parse(record.created_at) + (index + 1) * 1_000).toISOString();
+    record.messages.push({
+      message_id: randomUUID(),
+      sender_type: index % 2 === 0 ? 'admin' : 'user',
+      content: `Mock message ${index + 1}`,
+      created_at: createdAt,
+    });
+  }
+  record.status = 'waiting_user';
+  record.has_new_reply = true;
+  record.updated_at = record.messages.at(-1).created_at;
 }
 
 function takeFault() {

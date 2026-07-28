@@ -96,6 +96,7 @@ feedback = [
     "aes-gcm",
     "anyhow",
     "async-trait",
+    "base64",
     "chrono",
     "dep:bitfun-product-domains",
     "rand",

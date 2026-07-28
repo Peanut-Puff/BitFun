@@ -20,6 +20,8 @@ interface FeedbackInboxState {
   initializeForMode: (mode: PrivacyEffectiveMode) => Promise<void>;
   refresh: (userInitiated: boolean) => Promise<boolean>;
   loadMore: () => Promise<boolean>;
+  applyServerStatus: (feedbackId: string, status: FeedbackRecordSummary['status']) => void;
+  markInaccessible: (feedbackId: string) => void;
 }
 
 function cachedState(access: FeedbackAccessState) {
@@ -117,5 +119,19 @@ export const useFeedbackInboxStore = create<FeedbackInboxState>((set, get) => ({
       set({ loadingMore: false, error: normalizeFeedbackError(error) });
       return false;
     }
+  },
+
+  applyServerStatus: (feedbackId, status) => {
+    set(state => ({
+      records: state.records.map(record =>
+        record.feedbackId === feedbackId ? { ...record, status } : record),
+    }));
+  },
+
+  markInaccessible: feedbackId => {
+    set(state => ({
+      records: state.records.map(record =>
+        record.feedbackId === feedbackId ? { ...record, canOpen: false } : record),
+    }));
   },
 }));

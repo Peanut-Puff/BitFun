@@ -149,6 +149,19 @@
         "resolved": "已解決"
       }
     },
+    "conversation": {
+      "messages": "會話訊息",
+      "refresh": "重新整理會話",
+      "loading": "正在載入會話…",
+      "loadingEarlier": "正在載入更早訊息…",
+      "empty": "目前會話暫無訊息。",
+      "admin": "支援人員",
+      "you": "你",
+      "syncFailed": "新訊息同步失敗，已保留現有訊息。",
+      "cacheFailed": "加密訊息快取更新失敗，請重試。",
+      "ackFailed": "未能更新已讀狀態，未讀標記會繼續保留。",
+      "resolvedReadonly": "該會話已解決，目前為唯讀狀態。"
+    },
     "exit": {
       "title": "反饋仍在提交",
       "message": "繼續等待可保留本次提交結果；仍然退出不會承諾取消已經送出的請求。",

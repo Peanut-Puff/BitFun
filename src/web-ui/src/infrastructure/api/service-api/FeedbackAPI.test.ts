@@ -77,4 +77,28 @@ describe('FeedbackAPI', () => {
     expect(caught.requestId).toBe('request-1');
     expect(caught.retryAfterSeconds).toBe(30);
   });
+
+  it('opens message history through the local paging contract', async () => {
+    const { feedbackAPI } = await import('./FeedbackAPI');
+    invokeMock.mockResolvedValue({
+      messages: [],
+      nextCursor: 'cache:50',
+      hasMore: true,
+    });
+
+    await feedbackAPI.openConversation({ feedbackId: 'feedback-1' });
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'open_feedback_conversation',
+      {
+        request: {
+          feedbackId: 'feedback-1',
+          cursor: undefined,
+          pageSize: 50,
+          userInitiated: true,
+        },
+      },
+      { retries: 0 },
+    );
+  });
 });

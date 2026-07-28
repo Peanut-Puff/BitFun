@@ -20,6 +20,13 @@ pub enum FeedbackStatus {
     Resolved,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeedbackSender {
+    User,
+    Admin,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitFeedbackRequest {
@@ -79,6 +86,49 @@ pub struct FeedbackAccessState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct OpenFeedbackConversationRequest {
+    pub feedback_id: String,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    pub page_size: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackMessage {
+    pub message_id: String,
+    pub sender: FeedbackSender,
+    pub content: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackConversationPage {
+    pub messages: Vec<FeedbackMessage>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_error: Option<FeedbackError>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeFeedbackRequest {
+    pub feedback_id: String,
+    pub last_visible_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeFeedbackResponse {
+    pub read_through: String,
+    pub feedback_status: FeedbackStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeedbackError {
     pub code: String,
     pub message: String,
@@ -132,9 +182,22 @@ pub fn validate_inbox_page_size(page_size: u16) -> Result<(), FeedbackError> {
     Ok(())
 }
 
+pub fn validate_message_page_size(page_size: u16) -> Result<(), FeedbackError> {
+    if !(1..=200).contains(&page_size) {
+        return Err(FeedbackError::validation(
+            "PAGE_SIZE_INVALID",
+            "Message page size must be between 1 and 200",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{validate_content, validate_inbox_page_size, FEEDBACK_CONTENT_MAX_CHARS};
+    use super::{
+        validate_content, validate_inbox_page_size, validate_message_page_size,
+        FEEDBACK_CONTENT_MAX_CHARS,
+    };
 
     #[test]
     fn validates_feedback_content_by_unicode_scalar_count() {
@@ -157,6 +220,15 @@ mod tests {
         );
         assert_eq!(
             validate_inbox_page_size(101).unwrap_err().code,
+            "PAGE_SIZE_INVALID"
+        );
+    }
+
+    #[test]
+    fn validates_message_page_size() {
+        assert!(validate_message_page_size(50).is_ok());
+        assert_eq!(
+            validate_message_page_size(201).unwrap_err().code,
             "PAGE_SIZE_INVALID"
         );
     }

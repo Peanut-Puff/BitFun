@@ -149,6 +149,19 @@
         "resolved": "已解决"
       }
     },
+    "conversation": {
+      "messages": "会话消息",
+      "refresh": "刷新会话",
+      "loading": "正在加载会话…",
+      "loadingEarlier": "正在加载更早消息…",
+      "empty": "当前会话暂无消息。",
+      "admin": "支持人员",
+      "you": "你",
+      "syncFailed": "新消息同步失败，已保留现有消息。",
+      "cacheFailed": "加密消息缓存更新失败，请重试。",
+      "ackFailed": "未能更新已读状态，未读标记会继续保留。",
+      "resolvedReadonly": "该会话已解决，当前为只读状态。"
+    },
     "exit": {
       "title": "反馈仍在提交",
       "message": "继续等待可保留本次提交结果；仍然退出不会承诺取消已经发出的请求。",

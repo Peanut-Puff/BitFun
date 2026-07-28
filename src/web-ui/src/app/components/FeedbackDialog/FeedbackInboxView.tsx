@@ -8,6 +8,7 @@ import type {
   FeedbackStatus,
 } from '@/infrastructure/api';
 import { useFeedbackInboxStore } from './feedbackInboxStore';
+import { FeedbackConversationView } from './FeedbackConversationView';
 
 interface FeedbackInboxViewProps {
   wide: boolean;
@@ -177,10 +178,7 @@ const FeedbackSummaryDetail: React.FC<FeedbackSummaryDetailProps> = ({ wide, rec
       </header>
       <div className="bitfun-feedback__detail-body">
         {record.canOpen ? (
-          <div className="bitfun-feedback__detail-summary">
-            <span>{t('feedback.inbox.reference')}</span>
-            <code>{record.feedbackId}</code>
-          </div>
+          <FeedbackConversationView record={record} />
         ) : (
           <div className="bitfun-feedback__inaccessible" role="status">
             <strong>{t('feedback.inbox.inaccessibleTitle')}</strong>

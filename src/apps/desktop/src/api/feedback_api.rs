@@ -1,6 +1,7 @@
 use bitfun_product_domains::feedback::{
-    FeedbackAccessState, FeedbackError, FeedbackInboxPage, ListFeedbackRecordsRequest,
-    SubmitFeedbackRequest, SubmitFeedbackResponse,
+    AcknowledgeFeedbackRequest, AcknowledgeFeedbackResponse, FeedbackAccessState,
+    FeedbackConversationPage, FeedbackError, FeedbackInboxPage, ListFeedbackRecordsRequest,
+    OpenFeedbackConversationRequest, SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use bitfun_services_integrations::feedback::FeedbackService;
 use serde::Deserialize;
@@ -48,6 +49,26 @@ pub struct ListFeedbackCommandRequest {
     pub user_initiated: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenFeedbackCommandRequest {
+    pub feedback_id: String,
+    #[serde(default)]
+    pub cursor: Option<String>,
+    pub page_size: u16,
+    #[serde(default)]
+    pub user_initiated: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeFeedbackCommandRequest {
+    pub feedback_id: String,
+    pub last_visible_at: String,
+    #[serde(default)]
+    pub foreground_visible: bool,
+}
+
 #[tauri::command]
 pub async fn feedback_get_access_state(
     feedback_state: State<'_, FeedbackServiceState>,
@@ -75,6 +96,51 @@ pub async fn list_feedback(
         .list_feedback(ListFeedbackRecordsRequest {
             cursor: request.cursor,
             page_size: request.page_size,
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn open_feedback_conversation(
+    feedback_state: State<'_, FeedbackServiceState>,
+    privacy_state: State<'_, PrivacyServiceState>,
+    request: OpenFeedbackCommandRequest,
+) -> Result<FeedbackConversationPage, FeedbackError> {
+    if !privacy_state.collection_allowed() && !request.user_initiated {
+        return Err(FeedbackError::new(
+            "PRIVACY_BACKGROUND_REQUEST_BLOCKED",
+            "Background feedback requests require full privacy mode",
+            false,
+        ));
+    }
+    feedback_state
+        .service()?
+        .open_conversation(OpenFeedbackConversationRequest {
+            feedback_id: request.feedback_id,
+            cursor: request.cursor,
+            page_size: request.page_size,
+        })
+        .await
+}
+
+#[tauri::command]
+pub async fn acknowledge_feedback(
+    feedback_state: State<'_, FeedbackServiceState>,
+    _privacy_state: State<'_, PrivacyServiceState>,
+    request: AcknowledgeFeedbackCommandRequest,
+) -> Result<AcknowledgeFeedbackResponse, FeedbackError> {
+    if !request.foreground_visible {
+        return Err(FeedbackError::new(
+            "FEEDBACK_NOT_VISIBLE",
+            "Feedback must be visible before it can be marked as read",
+            false,
+        ));
+    }
+    feedback_state
+        .service()?
+        .acknowledge_feedback(AcknowledgeFeedbackRequest {
+            feedback_id: request.feedback_id,
+            last_visible_at: request.last_visible_at,
         })
         .await
 }

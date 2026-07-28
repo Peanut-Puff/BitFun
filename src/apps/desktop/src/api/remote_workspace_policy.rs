@@ -54,10 +54,18 @@ pub enum RemoteWorkspacePolicy {
 /// Declared remote-workspace policy for every registered Tauri command.
 pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = &[
     (
+        "acknowledge_feedback",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
+    (
         "feedback_get_access_state",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
     ("list_feedback", RemoteWorkspacePolicy::WorkspaceAgnostic),
+    (
+        "open_feedback_conversation",
+        RemoteWorkspacePolicy::WorkspaceAgnostic,
+    ),
     ("submit_feedback", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("privacy_accept", RemoteWorkspacePolicy::WorkspaceAgnostic),
     (

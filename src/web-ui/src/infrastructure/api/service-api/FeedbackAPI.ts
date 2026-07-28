@@ -5,6 +5,7 @@ export const FEEDBACK_CONTENT_MAX_CHARS = 2_000;
 
 export type FeedbackCategory = 'runtime_error' | 'feature_request' | 'usage_question' | 'other';
 export type FeedbackStatus = 'submitted' | 'in_progress' | 'waiting_user' | 'resolved';
+export type FeedbackSender = 'user' | 'admin';
 
 export interface SubmitFeedbackInput {
   category: FeedbackCategory;
@@ -43,6 +44,25 @@ export interface FeedbackAccessState {
 export interface ListFeedbackRecordsInput {
   cursor?: string;
   pageSize?: number;
+}
+
+export interface FeedbackMessage {
+  messageId: string;
+  sender: FeedbackSender;
+  content: string;
+  createdAt: string;
+}
+
+export interface FeedbackConversationPage {
+  messages: FeedbackMessage[];
+  nextCursor?: string;
+  hasMore: boolean;
+  syncError?: FeedbackApiError;
+}
+
+export interface AcknowledgeFeedbackResult {
+  readThrough: string;
+  feedbackStatus: FeedbackStatus;
 }
 
 interface FeedbackCommandErrorShape {
@@ -88,6 +108,35 @@ export class FeedbackAPI {
       cursor: input.cursor,
       pageSize: input.pageSize ?? 20,
       userInitiated: options.userInitiated,
+    });
+  }
+
+  async openConversation(input: {
+    feedbackId: string;
+    cursor?: string;
+    pageSize?: number;
+  }): Promise<FeedbackConversationPage> {
+    const page = await this.invoke<FeedbackConversationPage>('open_feedback_conversation', {
+      feedbackId: input.feedbackId,
+      cursor: input.cursor,
+      pageSize: input.pageSize ?? 50,
+      userInitiated: true,
+    });
+    return {
+      ...page,
+      syncError: page.syncError ? normalizeFeedbackError(page.syncError) : undefined,
+    };
+  }
+
+  async acknowledgeFeedback(
+    feedbackId: string,
+    lastVisibleAt: string,
+  ): Promise<AcknowledgeFeedbackResult> {
+    return this.invoke<AcknowledgeFeedbackResult>('acknowledge_feedback', {
+      feedbackId,
+      lastVisibleAt,
+      foregroundVisible: typeof document !== 'undefined'
+        && document.visibilityState === 'visible',
     });
   }
 

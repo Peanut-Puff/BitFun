@@ -1,14 +1,19 @@
+use super::message_cache::{MessageCache, MessageCacheData};
 use super::vault::{FeedbackCredentialStore, FileFeedbackCredentialStore};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use bitfun_product_domains::feedback::{
-    validate_content, validate_inbox_page_size, FeedbackAccessState, FeedbackError,
-    FeedbackInboxPage, FeedbackRecordSummary, FeedbackStatus, ListFeedbackRecordsRequest,
-    SubmitFeedbackRequest, SubmitFeedbackResponse,
+    validate_content, validate_inbox_page_size, validate_message_page_size,
+    AcknowledgeFeedbackRequest, AcknowledgeFeedbackResponse, FeedbackAccessState,
+    FeedbackConversationPage, FeedbackError, FeedbackInboxPage, FeedbackMessage,
+    FeedbackRecordSummary, FeedbackSender, FeedbackStatus, ListFeedbackRecordsRequest,
+    OpenFeedbackConversationRequest, SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use rand::RngCore;
 use reqwest::{Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,6 +47,10 @@ struct StoredCredentials {
     inbox_next_cursor: Option<String>,
     #[serde(default)]
     inbox_has_more: bool,
+    #[serde(default)]
+    message_cache_key: Option<String>,
+    #[serde(default)]
+    read_cursors: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -104,6 +113,34 @@ struct InboxItem {
     updated_at: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct MessagesResponse {
+    feedback_id: String,
+    messages: Vec<MessageItem>,
+    cursor: String,
+    has_more: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct MessageItem {
+    message_id: String,
+    sender_type: FeedbackSender,
+    content: String,
+    created_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AcknowledgeRequestBody<'a> {
+    read_cursor: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct AcknowledgeResponseBody {
+    feedback_id: String,
+    read_cursor: String,
+    feedback_status: FeedbackStatus,
+}
+
 #[derive(Debug, Default, Deserialize)]
 struct ServerErrorBody {
     error_code: Option<String>,
@@ -115,15 +152,18 @@ pub struct FeedbackService {
     base_url: Option<String>,
     client_version: String,
     credential_store: Arc<dyn FeedbackCredentialStore>,
+    message_cache_dir: Option<PathBuf>,
     state: Mutex<RuntimeState>,
 }
 
 impl FeedbackService {
     pub fn from_environment(data_dir: PathBuf, client_version: impl Into<String>) -> Self {
+        let message_cache_dir = data_dir.join("feedback-cache");
         Self::from_environment_with_credential_store(
             client_version,
             Arc::new(FileFeedbackCredentialStore::new(data_dir)),
         )
+        .with_message_cache_dir(message_cache_dir)
     }
 
     pub fn from_environment_with_credential_store(
@@ -152,8 +192,14 @@ impl FeedbackService {
             base_url,
             client_version,
             credential_store,
+            message_cache_dir: None,
             state: Mutex::new(RuntimeState::default()),
         }
+    }
+
+    pub fn with_message_cache_dir(mut self, message_cache_dir: PathBuf) -> Self {
+        self.message_cache_dir = Some(message_cache_dir);
+        self
     }
 
     pub async fn submit_feedback(
@@ -298,6 +344,281 @@ impl FeedbackService {
             next_cursor,
             has_more: received.has_more,
         })
+    }
+
+    pub async fn open_conversation(
+        &self,
+        request: OpenFeedbackConversationRequest,
+    ) -> Result<FeedbackConversationPage, FeedbackError> {
+        validate_message_page_size(request.page_size)?;
+        validate_feedback_id(&request.feedback_id)?;
+        let cache = self.message_cache().await?;
+        let loaded = cache.load(&request.feedback_id).await;
+        let mut data = match loaded {
+            Ok(Some(data)) => data,
+            Ok(None) => MessageCacheData::empty(&request.feedback_id),
+            Err(_) => {
+                cache.remove(&request.feedback_id).await.map_err(|_| {
+                    credential_error(
+                        "CACHE_RESET_FAILED",
+                        "Feedback message cache could not be reset",
+                    )
+                })?;
+                MessageCacheData::empty(&request.feedback_id)
+            }
+        };
+
+        let mut sync_error = None;
+        if request.cursor.is_none() {
+            if let Err(error) = self
+                .synchronize_messages(&request.feedback_id, &cache, &mut data)
+                .await
+            {
+                if is_capability_error(&error.code) {
+                    self.invalidate_conversation_access(&request.feedback_id, &cache)
+                        .await;
+                    return Err(error);
+                }
+                sync_error = Some(error);
+            }
+        }
+
+        if !data.sync_complete {
+            return Ok(FeedbackConversationPage {
+                messages: Vec::new(),
+                next_cursor: None,
+                has_more: false,
+                sync_error,
+            });
+        }
+        page_from_cache(
+            &data,
+            request.cursor.as_deref(),
+            request.page_size,
+            sync_error,
+        )
+    }
+
+    pub async fn acknowledge_feedback(
+        &self,
+        request: AcknowledgeFeedbackRequest,
+    ) -> Result<AcknowledgeFeedbackResponse, FeedbackError> {
+        validate_feedback_id(&request.feedback_id)?;
+        validate_timestamp(&request.last_visible_at)?;
+        let capability = self.capability_for(&request.feedback_id).await?;
+        let feedback_id = request.feedback_id.clone();
+        let body = AcknowledgeRequestBody {
+            read_cursor: &request.last_visible_at,
+        };
+        let response = match self
+            .send_authenticated_existing("feedback:read", |token| {
+                self.client
+                    .post(self.url(&format!("/support/v1/feedback/{feedback_id}/ack"))?)
+                    .bearer_auth(token)
+                    .header("X-Feedback-Capability", &capability)
+                    .header("X-Request-ID", Uuid::new_v4().to_string())
+                    .json(&body)
+                    .build()
+                    .map_err(network_error)
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                if is_capability_error(&error.code) {
+                    let cache = self.message_cache().await?;
+                    self.invalidate_conversation_access(&feedback_id, &cache)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        let acknowledged: AcknowledgeResponseBody =
+            match decode_success(response, StatusCode::OK).await {
+                Ok(value) => value,
+                Err(error) => {
+                    if is_capability_error(&error.code) {
+                        let cache = self.message_cache().await?;
+                        self.invalidate_conversation_access(&feedback_id, &cache)
+                            .await;
+                    }
+                    return Err(error);
+                }
+            };
+        if acknowledged.feedback_id != feedback_id {
+            return Err(FeedbackError::new(
+                "RESPONSE_INVALID",
+                "Feedback service returned a mismatched conversation",
+                true,
+            ));
+        }
+        validate_timestamp(&acknowledged.read_cursor).map_err(|_| {
+            FeedbackError::new(
+                "RESPONSE_INVALID",
+                "Feedback service returned an invalid read cursor",
+                true,
+            )
+        })?;
+
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        let mut next = state.stored.clone();
+        next.read_cursors
+            .insert(feedback_id.clone(), acknowledged.read_cursor.clone());
+        if let Some(record) = next
+            .inbox_items
+            .iter_mut()
+            .find(|record| record.feedback_id == feedback_id)
+        {
+            record.status = acknowledged.feedback_status;
+        }
+        self.persist(&next).await?;
+        state.stored = next;
+
+        Ok(AcknowledgeFeedbackResponse {
+            read_through: acknowledged.read_cursor,
+            feedback_status: acknowledged.feedback_status,
+        })
+    }
+
+    async fn synchronize_messages(
+        &self,
+        feedback_id: &str,
+        cache: &MessageCache,
+        data: &mut MessageCacheData,
+    ) -> Result<(), FeedbackError> {
+        let capability = self.capability_for(feedback_id).await?;
+        let mut reset_after_invalid_cursor = data.sync_cursor.is_some();
+        loop {
+            let cursor = data.sync_cursor.clone();
+            let response = self
+                .send_authenticated_existing("feedback:read", |token| {
+                    let mut request = self
+                        .client
+                        .get(self.url(&format!("/support/v1/feedback/{feedback_id}/messages"))?)
+                        .bearer_auth(token)
+                        .header("X-Feedback-Capability", &capability)
+                        .header("X-Request-ID", Uuid::new_v4().to_string())
+                        .query(&[("limit", "50")]);
+                    if let Some(cursor) = cursor.as_deref() {
+                        request = request.query(&[("cursor", cursor)]);
+                    }
+                    request.build().map_err(network_error)
+                })
+                .await?;
+            let received: MessagesResponse = match decode_success(response, StatusCode::OK).await {
+                Ok(value) => value,
+                Err(error) if error.code == "CURSOR_INVALID" && reset_after_invalid_cursor => {
+                    *data = MessageCacheData::empty(feedback_id);
+                    cache.store(data).await.map_err(|_| {
+                        credential_error(
+                            "CACHE_SAVE_FAILED",
+                            "Feedback message cache could not be saved",
+                        )
+                    })?;
+                    reset_after_invalid_cursor = false;
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
+            if received.feedback_id != feedback_id {
+                return Err(FeedbackError::new(
+                    "RESPONSE_INVALID",
+                    "Feedback service returned a mismatched conversation",
+                    true,
+                ));
+            }
+            let previous_cursor = data.sync_cursor.clone();
+            merge_messages(data, received.messages)?;
+            data.sync_cursor = (!received.cursor.is_empty()).then_some(received.cursor);
+            if received.has_more && data.sync_cursor == previous_cursor {
+                return Err(FeedbackError::new(
+                    "RESPONSE_INVALID",
+                    "Feedback service did not advance the message cursor",
+                    true,
+                ));
+            }
+            if !received.has_more {
+                data.sync_complete = true;
+            }
+            cache.store(data).await.map_err(|_| {
+                credential_error(
+                    "CACHE_SAVE_FAILED",
+                    "Feedback message cache could not be saved",
+                )
+            })?;
+            if !received.has_more {
+                return Ok(());
+            }
+        }
+    }
+
+    async fn message_cache(&self) -> Result<MessageCache, FeedbackError> {
+        let directory = self.message_cache_dir.clone().ok_or_else(|| {
+            FeedbackError::new(
+                "CACHE_UNAVAILABLE",
+                "Feedback message cache is unavailable",
+                false,
+            )
+        })?;
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        let key = match state
+            .stored
+            .message_cache_key
+            .as_deref()
+            .and_then(decode_cache_key)
+        {
+            Some(key) => key,
+            None => {
+                let mut key = [0u8; 32];
+                rand::rngs::OsRng.fill_bytes(&mut key);
+                let mut next = state.stored.clone();
+                next.message_cache_key = Some(BASE64.encode(key));
+                self.persist(&next).await?;
+                state.stored = next;
+                key
+            }
+        };
+        Ok(MessageCache::new(directory, key))
+    }
+
+    async fn capability_for(&self, feedback_id: &str) -> Result<String, FeedbackError> {
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        state
+            .stored
+            .capabilities
+            .get(feedback_id)
+            .cloned()
+            .ok_or_else(|| {
+                FeedbackError::new(
+                    "CAPABILITY_UNAVAILABLE",
+                    "Feedback conversation access is unavailable",
+                    false,
+                )
+            })
+    }
+
+    async fn invalidate_conversation_access(&self, feedback_id: &str, cache: &MessageCache) {
+        let _ = cache.remove(feedback_id).await;
+        let mut state = self.state.lock().await;
+        if self.ensure_existing_loaded(&mut state).await.is_err() {
+            return;
+        }
+        let mut next = state.stored.clone();
+        next.capabilities.remove(feedback_id);
+        next.read_cursors.remove(feedback_id);
+        if let Some(record) = next
+            .inbox_items
+            .iter_mut()
+            .find(|record| record.feedback_id == feedback_id)
+        {
+            record.can_open = false;
+        }
+        if self.persist(&next).await.is_ok() {
+            state.stored = next;
+        }
     }
 
     fn url(&self, path: &str) -> Result<String, FeedbackError> {
@@ -633,6 +954,113 @@ fn cached_inbox(stored: &StoredCredentials, can_reuse_access: bool) -> FeedbackI
     }
 }
 
+fn merge_messages(
+    data: &mut MessageCacheData,
+    received: Vec<MessageItem>,
+) -> Result<(), FeedbackError> {
+    let mut known = data
+        .messages
+        .iter()
+        .map(|message| message.message_id.clone())
+        .collect::<HashSet<_>>();
+    for message in received {
+        validate_content(&message.content).map_err(|_| {
+            FeedbackError::new(
+                "RESPONSE_INVALID",
+                "Feedback service returned invalid message content",
+                true,
+            )
+        })?;
+        validate_timestamp(&message.created_at).map_err(|_| {
+            FeedbackError::new(
+                "RESPONSE_INVALID",
+                "Feedback service returned an invalid message timestamp",
+                true,
+            )
+        })?;
+        if known.insert(message.message_id.clone()) {
+            data.messages.push(FeedbackMessage {
+                message_id: message.message_id,
+                sender: message.sender_type,
+                content: message.content,
+                created_at: message.created_at,
+            });
+        }
+    }
+    data.messages.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.message_id.cmp(&right.message_id))
+    });
+    Ok(())
+}
+
+fn page_from_cache(
+    data: &MessageCacheData,
+    cursor: Option<&str>,
+    page_size: u16,
+    sync_error: Option<FeedbackError>,
+) -> Result<FeedbackConversationPage, FeedbackError> {
+    let end = match cursor {
+        Some(cursor) => cursor
+            .strip_prefix("cache:")
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| *value <= data.messages.len())
+            .ok_or_else(|| {
+                FeedbackError::validation(
+                    "CACHE_CURSOR_INVALID",
+                    "Feedback message cache cursor is invalid",
+                )
+            })?,
+        None => data.messages.len(),
+    };
+    let start = end.saturating_sub(usize::from(page_size));
+    Ok(FeedbackConversationPage {
+        messages: data.messages[start..end].to_vec(),
+        next_cursor: (start > 0).then(|| format!("cache:{start}")),
+        has_more: start > 0,
+        sync_error,
+    })
+}
+
+fn decode_cache_key(value: &str) -> Option<[u8; 32]> {
+    let bytes = BASE64.decode(value).ok()?;
+    let mut key = [0u8; 32];
+    (bytes.len() == key.len()).then(|| {
+        key.copy_from_slice(&bytes);
+        key
+    })
+}
+
+fn validate_feedback_id(feedback_id: &str) -> Result<(), FeedbackError> {
+    Uuid::parse_str(feedback_id)
+        .map(|_| ())
+        .map_err(|_| FeedbackError::validation("FEEDBACK_ID_INVALID", "Feedback ID is invalid"))
+}
+
+fn validate_timestamp(timestamp: &str) -> Result<(), FeedbackError> {
+    DateTime::parse_from_rfc3339(timestamp)
+        .map(|_| ())
+        .map_err(|_| FeedbackError::validation("TIMESTAMP_INVALID", "Timestamp is invalid"))
+}
+
+fn is_capability_error(code: &str) -> bool {
+    matches!(
+        code,
+        "CAPABILITY_UNAVAILABLE"
+            | "CAPABILITY_INVALID"
+            | "CAPABILITY_EXPIRED"
+            | "CAPABILITY_REVOKED"
+            | "CAPABILITY_REQUIRED"
+            | "FEEDBACK_ACCESS_DENIED"
+            | "FEEDBACK_NOT_FOUND"
+            | "FEEDBACK_ACCESS_UNAVAILABLE"
+            | "FEEDBACK_ACCESS_EXPIRED"
+            | "SCOPE_INSUFFICIENT"
+            | "INSTANCE_BANNED"
+    )
+}
+
 fn configured_base_url() -> Option<String> {
     let configured = std::env::var("BITFUN_FEEDBACK_API_BASE_URL")
         .ok()
@@ -770,7 +1198,8 @@ mod tests {
     use anyhow::{anyhow, Result};
     use async_trait::async_trait;
     use bitfun_product_domains::feedback::{
-        FeedbackCategory, ListFeedbackRecordsRequest, SubmitFeedbackRequest,
+        AcknowledgeFeedbackRequest, FeedbackCategory, FeedbackStatus, ListFeedbackRecordsRequest,
+        OpenFeedbackConversationRequest, SubmitFeedbackRequest,
     };
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -884,6 +1313,103 @@ mod tests {
         drop(captured);
         let restored = service.access_state().await.unwrap();
         assert!(restored.cached_inbox.items[0].has_new_reply);
+    }
+
+    #[tokio::test]
+    async fn rebuilds_message_cache_then_pages_latest_to_earliest_and_acks_server_state() {
+        let feedback_id = "11111111-1111-4111-8111-111111111111";
+        let responses = vec![
+            json_response(
+                200,
+                r#"{"anonymous_id":"anon","access_token":"fresh","refresh_token":"refresh-2","expires_in":3600,"refresh_expires_in":2592000,"scope":"feedback:write,feedback:read","schema_version":"1"}"#,
+            ),
+            json_response(
+                200,
+                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","messages":[{"message_id":"message-1","sender_type":"user","content":"first","created_at":"2026-07-28T01:00:00Z"}],"cursor":"cursor-1","has_more":true}"#,
+            ),
+            json_response(
+                200,
+                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","messages":[{"message_id":"message-2","sender_type":"admin","content":"second","created_at":"2026-07-28T02:00:00Z"}],"cursor":"cursor-2","has_more":false}"#,
+            ),
+            json_response(
+                200,
+                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","read_cursor":"2026-07-28T02:00:00Z","feedback_status":"in_progress"}"#,
+            ),
+        ];
+        let (base_url, requests) = spawn_server(responses).await;
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            anonymous_id: Some("anon".to_string()),
+            refresh_token: Some("refresh-1".to_string()),
+            capabilities: HashMap::from([(
+                feedback_id.to_string(),
+                "capability-secret".to_string(),
+            )]),
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            ..MemoryStore::default()
+        });
+        let cache_dir = std::env::temp_dir().join(format!(
+            "bitfun-feedback-service-cache-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let service = FeedbackService::new(
+            Some(base_url),
+            "1.0.0".to_string(),
+            store,
+            Duration::from_secs(2),
+        )
+        .with_message_cache_dir(cache_dir.clone());
+
+        let latest = service
+            .open_conversation(OpenFeedbackConversationRequest {
+                feedback_id: feedback_id.to_string(),
+                cursor: None,
+                page_size: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(latest.messages[0].content, "second");
+        assert_eq!(latest.next_cursor.as_deref(), Some("cache:1"));
+        assert!(latest.has_more);
+
+        let earlier = service
+            .open_conversation(OpenFeedbackConversationRequest {
+                feedback_id: feedback_id.to_string(),
+                cursor: latest.next_cursor,
+                page_size: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(earlier.messages[0].content, "first");
+        assert!(!earlier.has_more);
+
+        let acknowledged = service
+            .acknowledge_feedback(AcknowledgeFeedbackRequest {
+                feedback_id: feedback_id.to_string(),
+                last_visible_at: "2026-07-28T02:00:00Z".to_string(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(acknowledged.read_through, "2026-07-28T02:00:00Z");
+        assert_eq!(acknowledged.feedback_status, FeedbackStatus::InProgress);
+
+        let captured = requests.lock().unwrap();
+        assert!(captured[1].starts_with(
+            "GET /support/v1/feedback/11111111-1111-4111-8111-111111111111/messages?limit=50 "
+        ));
+        assert!(captured[2].contains("cursor=cursor-1"));
+        assert_eq!(
+            header(&captured[1], "x-feedback-capability").as_deref(),
+            Some("capability-secret")
+        );
+        assert!(captured[3]
+            .starts_with("POST /support/v1/feedback/11111111-1111-4111-8111-111111111111/ack "));
+        drop(captured);
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
     }
 
     #[tokio::test]

@@ -149,6 +149,19 @@
         "resolved": "Resolved"
       }
     },
+    "conversation": {
+      "messages": "Conversation",
+      "refresh": "Refresh conversation",
+      "loading": "Loading conversation...",
+      "loadingEarlier": "Loading earlier messages...",
+      "empty": "This conversation has no messages.",
+      "admin": "Support",
+      "you": "You",
+      "syncFailed": "New messages could not be synchronized. Existing messages are retained.",
+      "cacheFailed": "The encrypted message cache could not be updated. Try again.",
+      "ackFailed": "Read status could not be updated. The unread marker is retained.",
+      "resolvedReadonly": "This conversation is resolved and read-only."
+    },
     "exit": {
       "title": "Feedback is still submitting",
       "message": "Continue waiting to preserve the result. Exiting anyway cannot guarantee cancellation of a request already sent.",
