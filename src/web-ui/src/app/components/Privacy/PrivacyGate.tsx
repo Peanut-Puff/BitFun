@@ -23,12 +23,20 @@ function detectedLocale(): PrivacyLocale {
 }
 
 export const PrivacyGate: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { status, initialize, accept, enterNotAccepted } = usePrivacy();
+  const {
+    status,
+    initialize,
+    refresh,
+    accept,
+    enterNotAccepted,
+    applyCollectionPolicy,
+  } = usePrivacy();
   const [dismissed, setDismissed] = useState(false);
   const [checked, setChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const [mutationError, setMutationError] = useState(false);
+  const [applyRetryRequired, setApplyRetryRequired] = useState(false);
   const locale = detectedLocale();
   const copy = copyByLocale[locale];
 
@@ -63,7 +71,8 @@ export const PrivacyGate: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const needsChoice = status?.enabled && status.lifecycleState === 'choice_required';
   const resourceError = loadError || status?.lifecycleState === 'resource_error';
-  const overlayVisible = !dismissed && (needsChoice || resourceError);
+  const choicePanelVisible = needsChoice || applyRetryRequired;
+  const overlayVisible = !dismissed && (choicePanelVisible || resourceError);
 
   const dismiss = useCallback(() => {
     if (!submitting) setDismissed(true);
@@ -101,6 +110,30 @@ export const PrivacyGate: React.FC<{ children: React.ReactNode }> = ({ children 
       setDismissed(true);
     } catch (error) {
       log.error('Privacy consent could not be saved or applied', error);
+      setMutationError(true);
+      try {
+        const next = await refresh(locale);
+        setApplyRetryRequired(
+          next.lifecycleState === 'full' && next.effectiveMode === 'privacy_not_accepted',
+        );
+      } catch {
+        setApplyRetryRequired(false);
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleApplyRetry = async () => {
+    if (submitting) return;
+    setSubmitting(true);
+    setMutationError(false);
+    try {
+      await applyCollectionPolicy('full', locale);
+      setApplyRetryRequired(false);
+      setDismissed(true);
+    } catch (error) {
+      log.error('Full privacy mode could not be applied', error);
       setMutationError(true);
     } finally {
       setSubmitting(false);
@@ -144,7 +177,7 @@ export const PrivacyGate: React.FC<{ children: React.ReactNode }> = ({ children 
           </div>
         </main>
       )}
-      {overlayVisible && needsChoice && !resourceError && status?.policy && (
+      {overlayVisible && choicePanelVisible && !resourceError && status?.policy && (
         <main
           className="bitfun-privacy-gate"
           data-testid="privacy-consent-gate"
@@ -186,24 +219,26 @@ export const PrivacyGate: React.FC<{ children: React.ReactNode }> = ({ children 
               </div>
             )}
             <div className="bitfun-privacy-gate__consent-row">
-              <Checkbox
-                checked={checked}
-                disabled={submitting}
-                onChange={event => setChecked(event.target.checked)}
-                label={copy.checkbox}
-                data-testid="privacy-consent-checkbox"
-              />
+              {!applyRetryRequired ? (
+                <Checkbox
+                  checked={checked}
+                  disabled={submitting}
+                  onChange={event => setChecked(event.target.checked)}
+                  label={copy.checkbox}
+                  data-testid="privacy-consent-checkbox"
+                />
+              ) : <span />}
               <div className="bitfun-privacy-gate__actions">
                 <Button variant="secondary" disabled={submitting} onClick={() => void handleNotAccepted()}>
                   {copy.disagree}
                 </Button>
                 <Button
-                  disabled={!checked || !status.releaseReady}
+                  disabled={!applyRetryRequired && (!checked || !status.releaseReady)}
                   isLoading={submitting}
-                  onClick={() => void handleAccept()}
+                  onClick={() => void (applyRetryRequired ? handleApplyRetry() : handleAccept())}
                   data-testid="privacy-accept"
                 >
-                  {copy.agree}
+                  {applyRetryRequired ? copy.retryFullMode : copy.agree}
                 </Button>
               </div>
             </div>

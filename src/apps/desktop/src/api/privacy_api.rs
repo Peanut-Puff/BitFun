@@ -94,6 +94,11 @@ impl PrivacyServiceState {
         mut status: PrivacyStatus,
     ) -> Result<PrivacyStatus, PrivacyError> {
         status.effective_mode = self.collection_policy.effective_mode();
+        if status.lifecycle_state == bitfun_product_domains::privacy::PrivacyLifecycleState::Full
+            && status.effective_mode != PrivacyEffectiveMode::Full
+        {
+            status.configuration_error = Some("PRIVACY_POLICY_NOT_APPLIED".to_string());
+        }
         Ok(status)
     }
 
@@ -186,6 +191,7 @@ pub async fn privacy_enter_not_accepted(
         return Ok(PrivacyStatus::disabled());
     }
     state.enter_not_accepted_mode()?;
+    crate::api::remote_connect_api::suspend_for_privacy().await;
     let app_version = app.package_info().version.to_string();
     let status = state
         .with_service(|service| {
@@ -245,6 +251,7 @@ pub async fn privacy_apply_collection_policy(
         state.enter_full_mode()?
     } else {
         state.enter_not_accepted_mode()?;
+        crate::api::remote_connect_api::suspend_for_privacy().await;
         false
     };
     if entered_full_mode {

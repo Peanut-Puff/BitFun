@@ -75,11 +75,11 @@ export function bundledPrivacyPreviewStatus(locale: string): PrivacyStatus {
   return {
     ...disabledPrivacyStatus,
     policy: {
-      policyVersion: '2026.07.1-dev-placeholder',
+      policyVersion: '2026.07.2-dev-placeholder',
       consentVersion: 'dev-placeholder-1',
-      changeType: 'material',
+      changeType: 'editorial',
       effectiveAt: '2026-07-22T00:00:00Z',
-      updatedAt: '2026-07-22T00:00:00Z',
+      updatedAt: '2026-07-28T00:00:00Z',
       locale: policyLocale,
       documentSha256: policy.documentSha256,
       content: policy.content,

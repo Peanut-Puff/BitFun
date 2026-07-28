@@ -37,5 +37,7 @@ describe('PrivacyAPI', () => {
     expect(status.lifecycleState).toBe('full');
     expect(status.policy?.locale).toBe('zh-CN');
     expect(status.policy?.content).toContain('开发测试占位版');
+    expect(status.policy?.policyVersion).toBe('2026.07.2-dev-placeholder');
+    expect(status.policy?.changeType).toBe('editorial');
   });
 });

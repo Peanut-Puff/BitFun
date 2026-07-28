@@ -487,6 +487,18 @@ pub fn cleanup_on_exit() {
     log::info!("Remote connect cleanup completed on exit");
 }
 
+/// Stop active collection-capable connections without clearing any saved
+/// account, bot, device, or workspace state.
+pub async fn suspend_for_privacy() {
+    let holder = get_service_holder();
+    let guard = holder.read().await;
+    if let Some(service) = guard.as_ref() {
+        service.stop_device_connection().await;
+        service.stop_bots().await;
+        service.stop_relay().await;
+    }
+}
+
 async fn ensure_service() -> Result<(), String> {
     let holder = get_service_holder();
     let guard = holder.read().await;

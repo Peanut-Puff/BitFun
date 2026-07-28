@@ -8,11 +8,11 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const POLICY_VERSION: &str = "2026.07.1-dev-placeholder";
+const POLICY_VERSION: &str = "2026.07.2-dev-placeholder";
 const CONSENT_VERSION: &str = "dev-placeholder-1";
 const EFFECTIVE_AT: &str = "2026-07-22T00:00:00Z";
-const UPDATED_AT: &str = "2026-07-22T00:00:00Z";
-const CHANGE_TYPE: PrivacyChangeType = PrivacyChangeType::Material;
+const UPDATED_AT: &str = "2026-07-28T00:00:00Z";
+const CHANGE_TYPE: PrivacyChangeType = PrivacyChangeType::Editorial;
 const LEGAL_CONTENT_SENTINEL: &str = "LEGAL_CONTENT_REQUIRED";
 
 const ZH_CN_CONTENT: &str = include_str!("assets/zh-CN.md");
@@ -20,6 +20,16 @@ const EN_US_CONTENT: &str = include_str!("assets/en-US.md");
 const ZH_CN_SHA256: &str = "9164815a22b2b2021039a19ed6e92556ce6ea44e42dd0103869b7c0887ae48bb";
 const EN_US_SHA256: &str = "71c9914ad977ff12fa31a5e228192d806b3b3d366498100bff615739d9b4c451";
 const ACCEPTED_POLICY_HASHES: &[(&str, &str, &str)] = &[
+    (
+        "2026.07.1-dev-placeholder",
+        "zh-CN",
+        ZH_CN_SHA256,
+    ),
+    (
+        "2026.07.1-dev-placeholder",
+        "en-US",
+        EN_US_SHA256,
+    ),
     (POLICY_VERSION, "zh-CN", ZH_CN_SHA256),
     (POLICY_VERSION, "en-US", EN_US_SHA256),
 ];
@@ -163,11 +173,8 @@ impl PrivacyService {
         } else {
             PrivacyEffectiveMode::PrivacyNotAccepted
         };
-        let has_unread_update = lifecycle_state == PrivacyLifecycleState::Full
-            && state
-                .consent
-                .as_ref()
-                .is_some_and(|consent| consent.accepted_policy_version != POLICY_VERSION)
+        let has_unread_update = CHANGE_TYPE == PrivacyChangeType::Editorial
+            && state.mode.is_some()
             && state.viewed_policy_version.as_deref() != Some(POLICY_VERSION);
 
         Ok(PrivacyStatus {
@@ -230,11 +237,10 @@ impl PrivacyService {
         locale: &str,
         app_version: &str,
     ) -> Result<PrivacyStatus, PrivacyError> {
-        let state = self.load_state().await;
         self.store_state(&PrivacyStateFile {
             mode: Some(StoredPrivacyMode::PrivacyNotAccepted),
             consent: None,
-            viewed_policy_version: state.viewed_policy_version,
+            viewed_policy_version: Some(POLICY_VERSION.to_string()),
         })
         .await?;
         self.status(locale, app_version).await
@@ -392,9 +398,12 @@ fn storage_error(error: std::io::Error) -> PrivacyError {
 
 #[cfg(test)]
 mod tests {
-    use super::{PrivacyCollectionPolicy, PrivacyService, normalize_locale};
+    use super::{
+        CONSENT_VERSION, PrivacyCollectionPolicy, PrivacyService, PrivacyStateFile,
+        StoredPrivacyMode, ZH_CN_SHA256, normalize_locale,
+    };
     use bitfun_product_domains::privacy::{
-        AcceptPrivacyRequest, PrivacyEffectiveMode, PrivacyLifecycleState,
+        AcceptPrivacyRequest, PrivacyConsentRecord, PrivacyEffectiveMode, PrivacyLifecycleState,
     };
 
     fn temporary_directory(name: &str) -> std::path::PathBuf {
@@ -423,6 +432,17 @@ mod tests {
             )
             .await
             .unwrap();
+    }
+
+    fn previous_consent(consent_version: &str) -> PrivacyConsentRecord {
+        PrivacyConsentRecord {
+            consent_version: consent_version.to_string(),
+            accepted_policy_version: "2026.07.1-dev-placeholder".to_string(),
+            accepted_document_sha256: ZH_CN_SHA256.to_string(),
+            accepted_at: "2026-07-24T00:00:00Z".to_string(),
+            locale: "zh-CN".to_string(),
+            app_version: "1.2.3".to_string(),
+        }
     }
 
     #[test]
@@ -475,6 +495,98 @@ mod tests {
         assert_eq!(status.lifecycle_state, PrivacyLifecycleState::Full);
         assert!(status.consent.is_some());
         assert!(!directory.join("privacy-state.tmp").exists());
+        let _ = tokio::fs::remove_dir_all(directory).await;
+    }
+
+    #[tokio::test]
+    async fn editorial_update_keeps_consent_and_clears_marker_after_viewing() {
+        let directory = temporary_directory("editorial-update");
+        let service = PrivacyService::new(directory.clone(), "zh-CN");
+        service
+            .store_state(&PrivacyStateFile {
+                mode: Some(StoredPrivacyMode::Full),
+                consent: Some(previous_consent(CONSENT_VERSION)),
+                viewed_policy_version: Some("2026.07.1-dev-placeholder".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let status = service.initialize("1.2.3").await.unwrap();
+        assert_eq!(status.lifecycle_state, PrivacyLifecycleState::Full);
+        assert!(status.has_unread_update);
+
+        let viewed = service
+            .mark_viewed(
+                status.policy.as_ref().unwrap().policy_version.as_str(),
+                "1.2.3",
+                "zh-CN",
+            )
+            .await
+            .unwrap();
+        assert!(!viewed.has_unread_update);
+        let _ = tokio::fs::remove_dir_all(directory).await;
+    }
+
+    #[tokio::test]
+    async fn not_accepted_update_is_marked_until_current_policy_is_chosen() {
+        let directory = temporary_directory("not-accepted-update");
+        let service = PrivacyService::new(directory.clone(), "en-US");
+        service
+            .store_state(&PrivacyStateFile {
+                mode: Some(StoredPrivacyMode::PrivacyNotAccepted),
+                consent: None,
+                viewed_policy_version: Some("2026.07.1-dev-placeholder".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert!(service.initialize("1.2.3").await.unwrap().has_unread_update);
+        let current = service
+            .enter_not_accepted("en-US", "1.2.3")
+            .await
+            .unwrap();
+        assert!(!current.has_unread_update);
+        let _ = tokio::fs::remove_dir_all(directory).await;
+    }
+
+    #[tokio::test]
+    async fn changed_consent_generation_requires_a_new_choice() {
+        let directory = temporary_directory("material-update");
+        let service = PrivacyService::new(directory.clone(), "zh-CN");
+        service
+            .store_state(&PrivacyStateFile {
+                mode: Some(StoredPrivacyMode::Full),
+                consent: Some(previous_consent("previous-generation")),
+                viewed_policy_version: Some("2026.07.1-dev-placeholder".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let status = service.initialize("1.2.3").await.unwrap();
+        assert_eq!(
+            status.lifecycle_state,
+            PrivacyLifecycleState::ChoiceRequired
+        );
+        assert_eq!(
+            status.effective_mode,
+            PrivacyEffectiveMode::PrivacyNotAccepted
+        );
+        let _ = tokio::fs::remove_dir_all(directory).await;
+    }
+
+    #[tokio::test]
+    async fn persistence_failure_uses_a_stable_storage_error() {
+        let directory = temporary_directory("storage-failure");
+        tokio::fs::create_dir_all(&directory).await.unwrap();
+        let blocking_file = directory.join("not-a-directory");
+        tokio::fs::write(&blocking_file, b"blocked").await.unwrap();
+        let service = PrivacyService::new(blocking_file.join("privacy"), "en-US");
+
+        let error = service
+            .enter_not_accepted("en-US", "1.2.3")
+            .await
+            .unwrap_err();
+        assert_eq!(error.code, "PRIVACY_STORAGE_ERROR");
         let _ = tokio::fs::remove_dir_all(directory).await;
     }
 

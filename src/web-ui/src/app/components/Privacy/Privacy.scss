@@ -102,6 +102,29 @@
   font-size: 12px;
 }
 
+.bitfun-privacy-dialog__metadata strong {
+  color: var(--color-accent-500);
+  font-weight: 600;
+}
+
+.bitfun-privacy-dialog__mode {
+  display: grid;
+  gap: 4px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+
+  strong {
+    font-size: 13px;
+    letter-spacing: 0;
+  }
+
+  span {
+    color: var(--color-text-secondary);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+}
+
 .bitfun-privacy-gate__consent-row {
   display: flex;
   align-items: center;
@@ -174,6 +197,19 @@
   border-top: 1px solid var(--border-subtle);
 }
 
+.bitfun-privacy-dialog__error {
+  padding: 10px 20px 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.bitfun-privacy-dialog__consent {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
 .bitfun-privacy-updated {
   display: inline-flex;
   margin-left: 5px;
@@ -189,6 +225,10 @@
     flex-direction: column;
   }
   .bitfun-privacy-gate__actions > button { flex: 1; }
+  .bitfun-privacy-dialog__consent {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 @keyframes bitfun-privacy-spin {
