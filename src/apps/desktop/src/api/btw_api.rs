@@ -78,6 +78,7 @@ pub async fn btw_ask_stream(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: BtwAskStreamRequest,
 ) -> Result<BtwAskStreamResponse, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     if request.request_id.trim().is_empty() {
         return Err("requestId is required".to_string());
     }

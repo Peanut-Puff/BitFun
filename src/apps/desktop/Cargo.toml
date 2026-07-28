@@ -22,7 +22,7 @@ serde_json = { workspace = true }
 bitfun-core = { path = "../../crates/assembly/core", default-features = false, features = ["product-full", "canvas-runtime"] }
 bitfun-agent-runtime = { path = "../../crates/execution/agent-runtime" }
 bitfun-product-domains = { path = "../../crates/contracts/product-domains", default-features = false }
-bitfun-services-integrations = { path = "../../crates/services/services-integrations", default-features = false, features = ["canvas-runtime"] }
+bitfun-services-integrations = { path = "../../crates/services/services-integrations", default-features = false, features = ["canvas-runtime", "privacy"] }
 bitfun-agent-tools = { path = "../../crates/execution/tool-contracts" }
 bitfun-transport = { path = "../../crates/adapters/transport", features = ["tauri-adapter"] }
 bitfun-events = { path = "../../crates/contracts/events" }
@@ -32,7 +32,6 @@ bitfun-acp = { path = "../../crates/interfaces/acp" }
 # Tauri
 tauri = { workspace = true }
 tauri-plugin-opener = { workspace = true }
-tauri-plugin-dialog = { workspace = true }
 tauri-plugin-fs = { workspace = true }
 tauri-plugin-log = { workspace = true }
 napi-ohos = { workspace = true }
@@ -128,6 +127,11 @@ atspi = { workspace = true }
 leptess = { workspace = true }
 
 [target.'cfg(all(not(target_env = "ohos")))'.dependencies]
+tauri = { workspace = true, features = ["unstable", "tray-icon", "macos-private-api"] }
+tauri-plugin-dialog = { workspace = true }
+tauri-plugin-updater = { workspace = true }
+screenshots = { workspace = true }
+enigo = { workspace = true }
 xz2 = { workspace = true }
 
 [lints]

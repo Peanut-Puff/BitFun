@@ -19,6 +19,7 @@ pub struct AnnouncementIdRequest {
 pub async fn get_pending_announcements(
     state: State<'_, AppState>,
 ) -> Result<Vec<AnnouncementCard>, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     let locale = state
         .config_service
         .get_config::<String>(Some("app.general.language"))
@@ -97,6 +98,7 @@ pub async fn trigger_announcement(
     state: State<'_, AppState>,
     request: AnnouncementIdRequest,
 ) -> Result<Option<AnnouncementCard>, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     let locale = state
         .config_service
         .get_config::<String>(Some("app.general.language"))
@@ -114,6 +116,7 @@ pub async fn trigger_announcement(
 pub async fn get_announcement_tips(
     state: State<'_, AppState>,
 ) -> Result<Vec<AnnouncementCard>, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     let locale = state
         .config_service
         .get_config::<String>(Some("app.general.language"))

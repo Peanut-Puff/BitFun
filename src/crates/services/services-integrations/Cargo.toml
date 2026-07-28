@@ -87,6 +87,11 @@ debug-log = ["anyhow", "chrono", "reqwest", "uuid"]
 deep-research = ["bitfun-agent-runtime"]
 git = ["bitfun-services-core", "chrono", "git2", "thiserror"]
 file-watch = ["notify"]
+privacy = [
+    "chrono",
+    "dep:bitfun-product-domains",
+    "sha2",
+]
 function-agents = [
     "bitfun-product-domains/function-agents",
     "dep:bitfun-product-domains",

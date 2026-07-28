@@ -14,10 +14,8 @@ import { harmonyShare, systemShare } from '@kit.ShareKit';
 import { fileIo } from '@kit.CoreFileKit';
 import { uniformTypeDescriptor } from '@kit.ArkData';
 import { calendarManager } from '@kit.CalendarKit';
-import { BusinessError } from '@kit.BasicServicesKit';
 import { updateManager } from '@kit.AppGalleryKit';
 import RustModule from 'libbitfun_desktop_lib.so';
-import { AppUpdater } from '../utils/AppUpdater';
 import { CommonUtils } from '../utils/CommonUtils';
 import { runDeveco } from '../utils/DevecoStart';
 
@@ -29,7 +27,6 @@ export default class EntryAbility extends RustAbility {
   public defaultPage: boolean = true;
   public commonEventListener: CommonEventListener | undefined = undefined;
   public remoteUrl: string = "";
-  private appUpdater: AppUpdater = new AppUpdater();
   public shareStatus: boolean = false;
 
   async onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): Promise<void> {
@@ -45,18 +42,8 @@ export default class EntryAbility extends RustAbility {
   onWindowStageCreate(windowStage: window.WindowStage): Promise<void> {
     AppGlobal.calendarMgr = calendarManager.getCalendarManager(this.context);
     AppGlobal.mContext = this.context;
-    const permissions: Permissions[] = ['ohos.permission.READ_CALENDAR', 'ohos.permission.WRITE_CALENDAR'];
     const DOMAIN_NUMBER: number = 0xFF00;
     const TAG: string = '[BitfunUIAbilityComponents]';
-
-    let atManager = abilityAccessCtrl.createAtManager();
-    AppGlobal.calendarMgr = calendarManager.getCalendarManager(this.context);
-
-    atManager.requestPermissionsFromUser(this.context, permissions).then(() => {
-      AppGlobal.calendarMgr = calendarManager.getCalendarManager(this.context);
-    }).catch((error: BusinessError) => {
-      hilog.info(DOMAIN_NUMBER, TAG, 'get permissions error: ' + error);
-    });
     RustModule.registerArktsFunction('open_dialog_file', async (err: Error, arg: string): Promise<string> => {
       let res = await CommonUtils.open_file_dialog();
       return res;
@@ -128,7 +115,18 @@ export default class EntryAbility extends RustAbility {
       return '';
     });
     RustModule.registerArktsFunction('call_calendar', async (err: Error, arg: string): Promise<string> => {
-      return await createMeetingEvent(arg);
+      const permissions: Permissions[] = [
+        'ohos.permission.READ_CALENDAR',
+        'ohos.permission.WRITE_CALENDAR'
+      ];
+      try {
+        await abilityAccessCtrl.createAtManager().requestPermissionsFromUser(this.context, permissions);
+        AppGlobal.calendarMgr = calendarManager.getCalendarManager(this.context);
+        return await createMeetingEvent(arg);
+      } catch (error) {
+        hilog.info(DOMAIN_NUMBER, TAG, 'calendar permission request failed: ' + JSON.stringify(error));
+        return 'calendar permission denied';
+      }
     });
     RustModule.registerArktsFunction('call_harmony_build', async (err: Error, arg: string): Promise<string> => {
       hilog.info(DOMAIN_NUMBER, TAG, 'register harmony build callback ' + arg);
@@ -207,11 +205,6 @@ export default class EntryAbility extends RustAbility {
       }
       return '';
     });
-    const autoUpdateEnabled = RustModule.getAppConfigBool('app.auto_update');
-    hilog.info(0x0000, 'vnext', 'autoUpdateEnabled: ' + autoUpdateEnabled);
-    if (autoUpdateEnabled) {
-      this.appUpdater.check(this.context);
-    }
     return super.onWindowStageCreate(windowStage);
   }
 

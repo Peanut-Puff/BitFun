@@ -338,6 +338,7 @@ fn get_account_relay_url() -> &'static Arc<RwLock<Option<String>>> {
 /// Read both the session and relay URL, returning owned clones to avoid
 /// holding locks across awaits.
 async fn read_account_context() -> Result<(AccountSession, String), String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     let session = get_account_session().read().await.clone();
     let relay_url = get_account_relay_url().read().await.clone();
     match (session, relay_url) {
@@ -426,6 +427,9 @@ async fn register_delegated_identity_providers() {
 }
 
 pub fn init_on_startup() {
+    if crate::api::privacy_api::require_collection_allowed().is_err() {
+        return;
+    }
     tauri::async_runtime::spawn(async {
         // Restore persisted account session (if any) before anything else
         // so that auto-sync, device routing, and bot delegation work on restart.
@@ -969,6 +973,7 @@ fn parse_connection_method(
 pub async fn remote_connect_start(
     request: StartRemoteConnectRequest,
 ) -> Result<ConnectionResult, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     ensure_service().await?;
     let method =
         parse_connection_method(&request.method, request.custom_server_url, request.lan_ip)?;
@@ -1135,6 +1140,7 @@ pub async fn remote_connect_configure_bot(request: ConfigureBotRequest) -> Resul
 pub async fn remote_connect_weixin_qr_start(
     request: WeixinQrStartRequest,
 ) -> Result<weixin::WeixinQrStartResponse, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     weixin::weixin_qr_start(request.base_url)
         .await
         .map_err(|e| format!("weixin qr start: {e}"))
@@ -1144,6 +1150,7 @@ pub async fn remote_connect_weixin_qr_start(
 pub async fn remote_connect_weixin_qr_poll(
     request: WeixinQrPollRequest,
 ) -> Result<weixin::WeixinQrPollResponse, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     weixin::weixin_qr_poll(&request.session_key, request.base_url)
         .await
         .map_err(|e| format!("weixin qr poll: {e}"))
@@ -1203,6 +1210,7 @@ fn current_device_identity() -> Result<DeviceIdentity, String> {
 
 #[tauri::command]
 pub async fn account_login(request: AccountAuthRequest) -> Result<AccountLoginResult, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     let device = current_device_identity()?;
     let client = AccountClient::new();
     let session = client
@@ -2339,6 +2347,9 @@ static SYNC_TX: OnceLock<mpsc::UnboundedSender<SyncRequest>> = OnceLock::new();
 
 /// Called once at app startup to start the debounced sync background task.
 pub fn init_auto_sync() {
+    if SYNC_TX.get().is_some() {
+        return;
+    }
     let (tx, rx) = mpsc::unbounded_channel::<SyncRequest>();
     let _ = SYNC_TX.set(tx);
     tauri::async_runtime::spawn(sync_background_loop(rx));
@@ -2348,6 +2359,9 @@ pub fn init_auto_sync() {
 /// `save_session_turn`, `save_session_metadata`, `create_session`,
 /// `update_session_title` Tauri commands.
 pub fn notify_session_changed(session_id: &str, workspace_path: &str) {
+    if crate::api::privacy_api::require_collection_allowed().is_err() {
+        return;
+    }
     if let Some(tx) = SYNC_TX.get() {
         let _ = tx.send(SyncRequest::SessionUpsert {
             session_id: session_id.to_string(),
@@ -2360,6 +2374,9 @@ pub fn notify_session_changed(session_id: &str, workspace_path: &str) {
 /// `delete_session` and `delete_persisted_session` Tauri commands. Sends a
 /// tombstone to the relay so the deleted session is not re-imported.
 pub fn notify_session_deleted(session_id: &str) {
+    if crate::api::privacy_api::require_collection_allowed().is_err() {
+        return;
+    }
     if let Some(tx) = SYNC_TX.get() {
         let _ = tx.send(SyncRequest::SessionDelete {
             session_id: session_id.to_string(),
@@ -2369,6 +2386,9 @@ pub fn notify_session_deleted(session_id: &str) {
 
 /// Non-blocking notification that config was changed. Called from `set_config`.
 pub fn notify_settings_changed() {
+    if crate::api::privacy_api::require_collection_allowed().is_err() {
+        return;
+    }
     if let Some(tx) = SYNC_TX.get() {
         let _ = tx.send(SyncRequest::Settings);
     }

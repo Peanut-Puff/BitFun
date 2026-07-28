@@ -36,6 +36,9 @@ pub mod miniapp;
 #[cfg(feature = "plugin-source")]
 pub mod plugin_source;
 
+#[cfg(feature = "privacy")]
+pub mod privacy;
+
 #[cfg(feature = "remote-connect")]
 pub mod remote_connect;
 

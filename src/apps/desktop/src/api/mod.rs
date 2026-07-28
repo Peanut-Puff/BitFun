@@ -30,8 +30,10 @@ pub mod mcp_api;
 pub mod miniapp_agent_api;
 pub mod miniapp_api;
 pub mod miniapp_export_api;
+pub mod ohos;
 pub mod path_target;
 pub mod peer_host_invoke;
+pub mod privacy_api;
 pub mod remote_connect_api;
 pub mod remote_workspace_policy;
 pub mod review_platform_api;
@@ -48,7 +50,6 @@ pub mod subagent_api;
 pub mod system_api;
 pub mod terminal_api;
 pub mod tool_api;
-pub mod ohos;
 pub mod workspace_activation;
 
 pub use app_state::{AppState, AppStatistics, HealthStatus, RemoteWorkspace};

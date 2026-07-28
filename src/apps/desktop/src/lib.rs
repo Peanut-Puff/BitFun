@@ -34,10 +34,9 @@ pub use api::*;
 
 use crate::ohos::ohos_file_system::{open_oh_file_dialog, set_theme_mode};
 use crate::ohos::window::{
-    close_window,handle_max_window,handle_min_window,handle_restore_window,window_is_maximized,
-    window_is_minimized, window_start_dragging
+    close_window, handle_max_window, handle_min_window, handle_restore_window, window_is_maximized,
+    window_is_minimized, window_start_dragging,
 };
-use std::path::PathBuf;
 use api::acp_client_api::*;
 use api::clipboard_file_api::*;
 use api::commands::*;
@@ -68,6 +67,7 @@ use api::subagent_api::*;
 use api::system_api::*;
 use api::tool_api::*;
 use startup_trace::{DesktopStartupTrace, DesktopStartupTraceSnapshot};
+use std::path::PathBuf;
 
 /// Agentic Coordinator state
 #[derive(Clone)]
@@ -231,9 +231,9 @@ fn show_main_window_for_secondary_launch(
             .map_err(|error| format!("failed to focus main window: {}", error))?;
 
         log::info!(
-        "Main window shown from secondary launch: attempt={}",
-        attempt
-    );
+            "Main window shown from secondary launch: attempt={}",
+            attempt
+        );
         Ok(())
     }
 
@@ -241,7 +241,6 @@ fn show_main_window_for_secondary_launch(
     {
         Err("Unable to support the main window".to_string())
     }
-
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -367,6 +366,23 @@ pub async fn _run() {
         );
     }
 
+    #[cfg(target_env = "ohos")]
+    let privacy_service_state = {
+        let locale =
+            if let Some(service) = bitfun_core::service::i18n::get_global_i18n_service().await {
+                service.get_current_locale().await.as_str().to_string()
+            } else {
+                "zh-CN".to_string()
+            };
+        api::privacy_api::PrivacyServiceState::enabled(
+            PathBuf::from("/data/storage/el2/base/files/bitfun/privacy"),
+            &locale,
+        )
+    };
+
+    #[cfg(not(target_env = "ohos"))]
+    let privacy_service_state = api::privacy_api::PrivacyServiceState::disabled();
+
     let step_started = Instant::now();
     let startup_log_level = resolve_runtime_log_level(log_config.level).await;
     startup_trace.record_elapsed_step(
@@ -476,6 +492,7 @@ pub async fn _run() {
         .manage(coordinator)
         .manage(scheduler)
         .manage(terminal_state)
+        .manage(privacy_service_state)
         .manage(startup_trace.clone())
         .on_page_load(|webview, payload| {
             let label = webview.label();
@@ -787,11 +804,15 @@ pub async fn _run() {
                 step_started,
             );
 
-            // Eagerly initialize the remote connect service so previously
-            // paired bots start listening immediately on app startup.
             let step_started = Instant::now();
-            api::remote_connect_api::init_on_startup();
+            let privacy_state: tauri::State<'_, api::privacy_api::PrivacyServiceState> =
+                app.state();
             api::remote_connect_api::init_auto_sync();
+            if privacy_state.collection_allowed() {
+                api::remote_connect_api::init_on_startup();
+            } else {
+                log::info!("Remote connect startup is disabled by the privacy collection policy");
+            }
             startup_trace.record_elapsed_step(
                 "native_setup",
                 "remote_connect_init_on_startup",
@@ -912,6 +933,12 @@ pub async fn _run() {
         .invoke_handler(tauri::generate_handler![
             theme::show_main_window,
             hide_main_window_after_close_request,
+            api::privacy_api::privacy_initialize,
+            api::privacy_api::privacy_get_status,
+            api::privacy_api::privacy_accept,
+            api::privacy_api::privacy_enter_not_accepted,
+            api::privacy_api::privacy_mark_viewed,
+            api::privacy_api::privacy_apply_collection_policy,
             api::agentic_api::create_session,
             api::agentic_api::update_session_model,
             api::agentic_api::update_session_title,
@@ -1668,13 +1695,13 @@ async fn init_function_agents(ai_client_factory: Arc<AIClientFactory>) -> anyhow
     Ok(())
 }
 
-fn init_mcp_servers(app_handle: tauri::AppHandle) {
+pub(crate) fn init_mcp_servers(app_handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let _ = app_handle;
     });
 }
 
-fn init_acp_clients(app_handle: tauri::AppHandle) {
+pub(crate) fn init_acp_clients(app_handle: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let state: tauri::State<'_, api::AppState> = app_handle.state();
         if let Some(service) = state.acp_client_service.as_ref() {

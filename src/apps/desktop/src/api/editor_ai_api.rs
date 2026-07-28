@@ -85,6 +85,7 @@ pub async fn editor_ai_stream(
     state: State<'_, AppState>,
     request: EditorAiStreamRequest,
 ) -> Result<EditorAiStreamResponse, String> {
+    crate::api::privacy_api::require_collection_allowed()?;
     if request.request_id.trim().is_empty() {
         return Err("requestId is required".to_string());
     }
