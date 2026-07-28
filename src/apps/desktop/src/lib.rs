@@ -965,6 +965,7 @@ pub async fn _run() {
             api::feedback_api::feedback_get_access_state,
             api::feedback_api::list_feedback,
             api::feedback_api::open_feedback_conversation,
+            api::feedback_api::reply_feedback,
             api::feedback_api::submit_feedback,
             api::agentic_api::create_session,
             api::agentic_api::update_session_model,

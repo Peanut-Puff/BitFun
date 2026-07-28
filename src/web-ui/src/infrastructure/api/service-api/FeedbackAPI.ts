@@ -65,6 +65,11 @@ export interface AcknowledgeFeedbackResult {
   feedbackStatus: FeedbackStatus;
 }
 
+export interface ReplyFeedbackResult {
+  message: FeedbackMessage;
+  feedbackStatus: FeedbackStatus;
+}
+
 interface FeedbackCommandErrorShape {
   code?: string;
   message?: string;
@@ -137,6 +142,13 @@ export class FeedbackAPI {
       lastVisibleAt,
       foregroundVisible: typeof document !== 'undefined'
         && document.visibilityState === 'visible',
+    });
+  }
+
+  async replyFeedback(feedbackId: string, content: string): Promise<ReplyFeedbackResult> {
+    return this.invoke<ReplyFeedbackResult>('reply_feedback', {
+      feedbackId,
+      content,
     });
   }
 

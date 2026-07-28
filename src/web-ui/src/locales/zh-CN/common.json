@@ -162,6 +162,25 @@
       "ackFailed": "未能更新已读状态，未读标记会继续保留。",
       "resolvedReadonly": "该会话已解决，当前为只读状态。"
     },
+    "reply": {
+      "input": "回复内容",
+      "placeholder": "输入对该反馈的回复",
+      "send": "发送回复",
+      "consentTitle": "同意隐私协议后发送",
+      "consentMessage": "发送回复需要先保存当前版本的隐私同意。",
+      "consentConfirm": "同意并发送",
+      "consentSaveFailed": "隐私同意未能保存，回复尚未发送。你可以重试或取消。",
+      "privacySaveFailed": "隐私同意未能保存，回复尚未发送。当前仍按未同意规则运行。",
+      "resolved": "该会话已解决，不能继续回复。",
+      "rateLimited": "发送过于频繁，请在 {{seconds}} 秒后重试。",
+      "timeout": "反馈服务响应超时，回复草稿已保留。",
+      "network": "暂时无法连接反馈服务，回复草稿已保留。",
+      "failed": "回复发送失败（{{code}}），草稿已保留。",
+      "discardTitle": "放弃回复？",
+      "discardMessage": "回复尚未发送，离开详情后不会保留。",
+      "discardConfirm": "放弃回复",
+      "continueEditing": "继续编辑"
+    },
     "exit": {
       "title": "反馈仍在提交",
       "message": "继续等待可保留本次提交结果；仍然退出不会承诺取消已经发出的请求。",

@@ -66,6 +66,7 @@ pub const REMOTE_WORKSPACE_COMMAND_POLICIES: &[(&str, RemoteWorkspacePolicy)] = 
         "open_feedback_conversation",
         RemoteWorkspacePolicy::WorkspaceAgnostic,
     ),
+    ("reply_feedback", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("submit_feedback", RemoteWorkspacePolicy::WorkspaceAgnostic),
     ("privacy_accept", RemoteWorkspacePolicy::WorkspaceAgnostic),
     (

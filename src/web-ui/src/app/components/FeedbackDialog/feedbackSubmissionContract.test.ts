@@ -33,9 +33,9 @@ describe('OpenHarmony feedback submission contract', () => {
     const layout = readSource('../../layout/AppLayout.tsx');
 
     expect(dialog).toContain('category || content || includeCorrelation || privacyChecked');
-    expect(dialog).toContain('if (submitting) return;');
-    expect(dialog).toContain('showCloseButton={!submitting}');
-    expect(dialog).toContain('closeOnOverlayClick={!submitting}');
+    expect(dialog).toContain('if (submitting || replyState.sending) return;');
+    expect(dialog).toContain('showCloseButton={!submitting && !replyState.sending}');
+    expect(dialog).toContain('closeOnOverlayClick={!submitting && !replyState.sending}');
     expect(dialog).toContain('registerCriticalOperationExitGuard');
     expect(layout).toContain('await confirmCriticalOperationExit()');
   });

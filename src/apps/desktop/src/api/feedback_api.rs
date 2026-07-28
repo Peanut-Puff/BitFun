@@ -1,7 +1,8 @@
 use bitfun_product_domains::feedback::{
     AcknowledgeFeedbackRequest, AcknowledgeFeedbackResponse, FeedbackAccessState,
     FeedbackConversationPage, FeedbackError, FeedbackInboxPage, ListFeedbackRecordsRequest,
-    OpenFeedbackConversationRequest, SubmitFeedbackRequest, SubmitFeedbackResponse,
+    OpenFeedbackConversationRequest, ReplyFeedbackRequest, ReplyFeedbackResponse,
+    SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use bitfun_services_integrations::feedback::FeedbackService;
 use serde::Deserialize;
@@ -143,6 +144,22 @@ pub async fn acknowledge_feedback(
             last_visible_at: request.last_visible_at,
         })
         .await
+}
+
+#[tauri::command]
+pub async fn reply_feedback(
+    feedback_state: State<'_, FeedbackServiceState>,
+    privacy_state: State<'_, PrivacyServiceState>,
+    request: ReplyFeedbackRequest,
+) -> Result<ReplyFeedbackResponse, FeedbackError> {
+    if !privacy_state.collection_allowed() {
+        return Err(FeedbackError::new(
+            "PRIVACY_CONSENT_REQUIRED",
+            "Feedback replies require full privacy mode",
+            false,
+        ));
+    }
+    feedback_state.service()?.reply_feedback(request).await
 }
 
 #[tauri::command]

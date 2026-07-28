@@ -36,4 +36,30 @@ describe('feedback conversation contract', () => {
     expect(source).toContain('<p>{message.content}</p>');
     expect(source).not.toContain('dangerouslySetInnerHTML');
   });
+
+  it('gates replies on consent while preserving and Unicode-truncating the draft', () => {
+    const source = readSource('./FeedbackConversationView.tsx');
+    const acceptPosition = source.indexOf('await accept({');
+    const replyPosition = source.indexOf('await executeReply(content);', acceptPosition);
+
+    expect(source).toContain('truncateFeedbackContent(value)');
+    expect(source).toContain('feedbackContentLength(draft)');
+    expect(source).toContain("status?.effectiveMode !== 'full'");
+    expect(source).toContain('setShowConsent(true)');
+    expect(acceptPosition).toBeGreaterThan(0);
+    expect(replyPosition).toBeGreaterThan(acceptPosition);
+    expect(source).toContain("setReplyError('PRIVACY_SAVE_FAILED')");
+    expect(source).toContain('if (!sending) setShowConsent(false)');
+  });
+
+  it('freezes reply interactions and requires confirmation before discarding a draft', () => {
+    const conversation = readSource('./FeedbackConversationView.tsx');
+    const dialog = readSource('./FeedbackDialog.tsx');
+
+    expect(conversation).toContain('disabled={sending}');
+    expect(conversation).toContain('confirmDisabled={sending}');
+    expect(dialog).toContain("setPendingReplyExit({ kind: 'close' })");
+    expect(dialog).toContain("t('feedback.reply.discardConfirm')");
+    expect(dialog).toContain('setReplyResetVersion(current => current + 1)');
+  });
 });

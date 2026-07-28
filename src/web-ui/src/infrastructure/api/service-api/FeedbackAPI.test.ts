@@ -101,4 +101,25 @@ describe('FeedbackAPI', () => {
       { retries: 0 },
     );
   });
+
+  it('sends replies through a structured request without adapter retries', async () => {
+    const { feedbackAPI } = await import('./FeedbackAPI');
+    invokeMock.mockResolvedValue({
+      message: {
+        messageId: 'message-1',
+        sender: 'user',
+        content: 'reply',
+        createdAt: '2026-07-28T03:00:00Z',
+      },
+      feedbackStatus: 'in_progress',
+    });
+
+    await feedbackAPI.replyFeedback('feedback-1', 'reply');
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'reply_feedback',
+      { request: { feedbackId: 'feedback-1', content: 'reply' } },
+      { retries: 0 },
+    );
+  });
 });

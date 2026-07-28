@@ -129,6 +129,20 @@ pub struct AcknowledgeFeedbackResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ReplyFeedbackRequest {
+    pub feedback_id: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyFeedbackResponse {
+    pub message: FeedbackMessage,
+    pub feedback_status: FeedbackStatus,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeedbackError {
     pub code: String,
     pub message: String,

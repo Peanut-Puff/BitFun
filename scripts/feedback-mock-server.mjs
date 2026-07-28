@@ -5,6 +5,7 @@ const port = Number.parseInt(process.env.BITFUN_FEEDBACK_MOCK_PORT ?? '38971', 1
 const enrollments = new Map();
 const refreshTokens = new Map();
 const createRequests = new Map();
+const replyRequests = new Map();
 const records = new Map();
 let nextFault = null;
 
@@ -145,6 +146,52 @@ const server = http.createServer(async (request, response) => {
   }
 
   const messagesMatch = /^\/support\/v1\/feedback\/([^/]+)\/messages$/.exec(url.pathname);
+  if (request.method === 'POST' && messagesMatch) {
+    const record = authorizeRecord(request, response, requestId, messagesMatch[1]);
+    if (!record) return;
+    const idempotencyKey = requireUuidHeader(request, response, requestId);
+    if (!idempotencyKey) return;
+    const body = await readJson(request);
+    const fingerprint = `${record.feedback_id}:${JSON.stringify(body)}`;
+    const existing = replyRequests.get(idempotencyKey);
+    if (existing && existing.fingerprint !== fingerprint) {
+      return sendError(response, 409, 'IDEMPOTENCY_CONFLICT', requestId);
+    }
+    if (existing) {
+      return send(response, 201, existing.result, requestId, {
+        'Idempotency-Replayed': 'true',
+      });
+    }
+    if (record.status === 'resolved') {
+      return sendError(response, 409, 'FEEDBACK_ALREADY_RESOLVED', requestId);
+    }
+    if (typeof body.content !== 'string' || body.content.trim().length === 0) {
+      return sendError(response, 400, 'CONTENT_EMPTY', requestId);
+    }
+    if (Array.from(body.content.trim()).length > 2_000) {
+      return sendError(response, 400, 'CONTENT_TOO_LONG', requestId);
+    }
+    const previousTime = Date.parse(record.messages.at(-1)?.created_at ?? record.created_at);
+    const createdAt = new Date(Math.max(Date.now(), previousTime + 1)).toISOString();
+    const message = {
+      message_id: randomUUID(),
+      sender_type: 'user',
+      content: body.content.trim(),
+      created_at: createdAt,
+    };
+    record.messages.push(message);
+    record.status = 'in_progress';
+    record.has_new_reply = false;
+    record.updated_at = createdAt;
+    const result = {
+      message_id: message.message_id,
+      sender_type: message.sender_type,
+      created_at: message.created_at,
+      feedback_status: record.status,
+    };
+    replyRequests.set(idempotencyKey, { fingerprint, result });
+    return send(response, 201, result, requestId, { 'Idempotency-Replayed': 'false' });
+  }
   if (request.method === 'GET' && messagesMatch) {
     const record = authorizeRecord(request, response, requestId, messagesMatch[1]);
     if (!record) return;

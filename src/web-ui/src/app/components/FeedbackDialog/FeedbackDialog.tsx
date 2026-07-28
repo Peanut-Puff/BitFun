@@ -36,6 +36,10 @@ interface FeedbackDialogProps {
 }
 
 type SubmissionError = FeedbackApiError | 'PRIVACY_SAVE_FAILED' | null;
+type PendingReplyExit =
+  | { kind: 'close' }
+  | { kind: 'view'; view: 'create' | 'inbox' }
+  | { kind: 'select'; feedbackId: string | null };
 
 export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose }) => {
   const { t } = useI18n('common');
@@ -57,6 +61,9 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
   const [wasTruncated, setWasTruncated] = useState(false);
   const [completed, setCompleted] = useState(false);
   const [retryWaitSeconds, setRetryWaitSeconds] = useState(0);
+  const [replyState, setReplyState] = useState({ hasDraft: false, sending: false });
+  const [replyResetVersion, setReplyResetVersion] = useState(0);
+  const [pendingReplyExit, setPendingReplyExit] = useState<PendingReplyExit | null>(null);
 
   const contentLength = feedbackContentLength(content);
   const correlationAvailable = feedbackAPI.correlationAvailable();
@@ -78,7 +85,7 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
   ], [t]);
 
   useEffect(() => {
-    if (!submitting) return;
+    if (!submitting && !replyState.sending) return;
     return registerCriticalOperationExitGuard(() => confirmDialog({
       title: t('feedback.exit.title'),
       message: t('feedback.exit.message'),
@@ -87,7 +94,7 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
       confirmDanger: true,
       showCancel: true,
     }));
-  }, [submitting, t]);
+  }, [replyState.sending, submitting, t]);
 
   useEffect(() => {
     if (retryWaitSeconds <= 0) return;
@@ -126,6 +133,9 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
     setRetryWaitSeconds(0);
     setActiveView('create');
     setSelectedFeedbackId(null);
+    setReplyState({ hasDraft: false, sending: false });
+    setReplyResetVersion(current => current + 1);
+    setPendingReplyExit(null);
   }, []);
 
   const closeImmediately = useCallback(() => {
@@ -134,13 +144,17 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
   }, [onClose, reset]);
 
   const requestClose = useCallback(() => {
-    if (submitting) return;
+    if (submitting || replyState.sending) return;
+    if (activeView === 'inbox' && replyState.hasDraft) {
+      setPendingReplyExit({ kind: 'close' });
+      return;
+    }
     if (hasDraft && !completed) {
       setShowDiscardConfirm(true);
       return;
     }
     closeImmediately();
-  }, [closeImmediately, completed, hasDraft, submitting]);
+  }, [activeView, closeImmediately, completed, hasDraft, replyState, submitting]);
 
   const handleContentChange = (value: string) => {
     const truncated = truncateFeedbackContent(value);
@@ -189,9 +203,50 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
   };
 
   const changeView = (view: 'create' | 'inbox') => {
-    if (submitting) return;
+    if (submitting || replyState.sending) return;
+    if (activeView === 'inbox' && view !== activeView && replyState.hasDraft) {
+      setPendingReplyExit({ kind: 'view', view });
+      return;
+    }
     setActiveView(view);
     if (view === 'inbox') void refreshInbox(true);
+  };
+
+  const selectFeedback = (feedbackId: string | null) => {
+    if (replyState.sending || feedbackId === selectedFeedbackId) return;
+    if (replyState.hasDraft) {
+      setPendingReplyExit({ kind: 'select', feedbackId });
+      return;
+    }
+    setSelectedFeedbackId(feedbackId);
+  };
+
+  const updateReplyState = useCallback((next: { hasDraft: boolean; sending: boolean }) => {
+    setReplyState(current => current.hasDraft === next.hasDraft && current.sending === next.sending
+      ? current
+      : next);
+  }, []);
+
+  const discardReplyAndContinue = () => {
+    const action = pendingReplyExit;
+    setPendingReplyExit(null);
+    setReplyState({ hasDraft: false, sending: false });
+    setReplyResetVersion(current => current + 1);
+    if (!action) return;
+    if (action.kind === 'select') {
+      setSelectedFeedbackId(action.feedbackId);
+      return;
+    }
+    if (action.kind === 'view') {
+      setActiveView(action.view);
+      if (action.view === 'inbox') void refreshInbox(true);
+      return;
+    }
+    if (hasDraft && !completed) {
+      setShowDiscardConfirm(true);
+    } else {
+      closeImmediately();
+    }
   };
 
   const openGitCode = () => {
@@ -230,8 +285,8 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
         size="xlarge"
         overlayClassName="bitfun-feedback__overlay"
         contentClassName="bitfun-feedback__modal-content"
-        showCloseButton={!submitting}
-        closeOnOverlayClick={!submitting}
+        showCloseButton={!submitting && !replyState.sending}
+        closeOnOverlayClick={!submitting && !replyState.sending}
         testId="feedback-dialog"
       >
         {completed ? (
@@ -249,7 +304,7 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
                 role="tab"
                 aria-selected={activeView === 'create'}
                 className={activeView === 'create' ? 'is-active' : ''}
-                disabled={submitting}
+                disabled={submitting || replyState.sending}
                 onClick={() => changeView('create')}
               >
                 <SquarePen size={15} aria-hidden="true" />
@@ -260,7 +315,7 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
                 role="tab"
                 aria-selected={activeView === 'inbox'}
                 className={activeView === 'inbox' ? 'is-active' : ''}
-                disabled={submitting}
+                disabled={submitting || replyState.sending}
                 onClick={() => changeView('inbox')}
               >
                 <List size={15} aria-hidden="true" />
@@ -373,7 +428,10 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
               <FeedbackInboxView
                 wide={wideLayout}
                 selectedId={selectedFeedbackId}
-                onSelect={setSelectedFeedbackId}
+                onSelect={selectFeedback}
+                replySending={replyState.sending}
+                resetDraftVersion={replyResetVersion}
+                onReplyStateChange={updateReplyState}
               />
             )}
           </div>
@@ -387,6 +445,16 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
         message={t('feedback.discard.message')}
         confirmText={t('feedback.discard.confirm')}
         cancelText={t('feedback.discard.continue')}
+        confirmDanger
+      />
+      <ConfirmDialog
+        isOpen={pendingReplyExit !== null}
+        onClose={() => setPendingReplyExit(null)}
+        onConfirm={discardReplyAndContinue}
+        title={t('feedback.reply.discardTitle')}
+        message={t('feedback.reply.discardMessage')}
+        confirmText={t('feedback.reply.discardConfirm')}
+        cancelText={t('feedback.reply.continueEditing')}
         confirmDanger
       />
       <PrivacyStatementDialog

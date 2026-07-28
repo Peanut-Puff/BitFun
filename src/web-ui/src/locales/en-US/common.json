@@ -162,6 +162,25 @@
       "ackFailed": "Read status could not be updated. The unread marker is retained.",
       "resolvedReadonly": "This conversation is resolved and read-only."
     },
+    "reply": {
+      "input": "Reply",
+      "placeholder": "Write a reply to this feedback",
+      "send": "Send reply",
+      "consentTitle": "Accept privacy terms to send",
+      "consentMessage": "Sending this reply requires saving consent to the current privacy terms first.",
+      "consentConfirm": "Accept and send",
+      "consentSaveFailed": "Privacy consent could not be saved, so the reply was not sent. Retry or cancel.",
+      "privacySaveFailed": "Privacy consent could not be saved, so the reply was not sent. Privacy-not-accepted rules remain active.",
+      "resolved": "This conversation is resolved and cannot receive replies.",
+      "rateLimited": "Too many replies. Try again in {{seconds}} seconds.",
+      "timeout": "The feedback service timed out. Your reply is retained.",
+      "network": "The feedback service is unreachable. Your reply is retained.",
+      "failed": "Reply failed ({{code}}). Your draft is retained.",
+      "discardTitle": "Discard reply?",
+      "discardMessage": "This reply has not been sent and will not be kept after leaving the conversation.",
+      "discardConfirm": "Discard reply",
+      "continueEditing": "Continue editing"
+    },
     "exit": {
       "title": "Feedback is still submitting",
       "message": "Continue waiting to preserve the result. Exiting anyway cannot guarantee cancellation of a request already sent.",

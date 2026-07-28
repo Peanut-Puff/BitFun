@@ -162,6 +162,25 @@
       "ackFailed": "未能更新已讀狀態，未讀標記會繼續保留。",
       "resolvedReadonly": "該會話已解決，目前為唯讀狀態。"
     },
+    "reply": {
+      "input": "回覆內容",
+      "placeholder": "輸入對該反饋的回覆",
+      "send": "傳送回覆",
+      "consentTitle": "同意隱私協議後傳送",
+      "consentMessage": "傳送回覆需要先儲存目前版本的隱私同意。",
+      "consentConfirm": "同意並傳送",
+      "consentSaveFailed": "隱私同意未能儲存，回覆尚未傳送。你可以重試或取消。",
+      "privacySaveFailed": "隱私同意未能儲存，回覆尚未傳送。目前仍按未同意規則執行。",
+      "resolved": "該會話已解決，不能繼續回覆。",
+      "rateLimited": "傳送過於頻繁，請在 {{seconds}} 秒後重試。",
+      "timeout": "反饋服務回應逾時，回覆草稿已保留。",
+      "network": "暫時無法連線反饋服務，回覆草稿已保留。",
+      "failed": "回覆傳送失敗（{{code}}），草稿已保留。",
+      "discardTitle": "放棄回覆？",
+      "discardMessage": "回覆尚未傳送，離開詳情後不會保留。",
+      "discardConfirm": "放棄回覆",
+      "continueEditing": "繼續編輯"
+    },
     "exit": {
       "title": "反饋仍在提交",
       "message": "繼續等待可保留本次提交結果；仍然退出不會承諾取消已經送出的請求。",

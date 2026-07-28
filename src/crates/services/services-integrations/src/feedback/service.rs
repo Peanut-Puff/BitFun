@@ -6,7 +6,8 @@ use bitfun_product_domains::feedback::{
     AcknowledgeFeedbackRequest, AcknowledgeFeedbackResponse, FeedbackAccessState,
     FeedbackConversationPage, FeedbackError, FeedbackInboxPage, FeedbackMessage,
     FeedbackRecordSummary, FeedbackSender, FeedbackStatus, ListFeedbackRecordsRequest,
-    OpenFeedbackConversationRequest, SubmitFeedbackRequest, SubmitFeedbackResponse,
+    OpenFeedbackConversationRequest, ReplyFeedbackRequest, ReplyFeedbackResponse,
+    SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use rand::RngCore;
@@ -51,6 +52,10 @@ struct StoredCredentials {
     message_cache_key: Option<String>,
     #[serde(default)]
     read_cursors: HashMap<String, String>,
+    #[serde(default)]
+    pending_reply_fingerprints: HashMap<String, String>,
+    #[serde(default)]
+    pending_reply_idempotency_keys: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -138,6 +143,19 @@ struct AcknowledgeRequestBody<'a> {
 struct AcknowledgeResponseBody {
     feedback_id: String,
     read_cursor: String,
+    feedback_status: FeedbackStatus,
+}
+
+#[derive(Debug, Serialize)]
+struct ReplyRequestBody<'a> {
+    content: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReplyResponseBody {
+    message_id: String,
+    sender_type: FeedbackSender,
+    created_at: String,
     feedback_status: FeedbackStatus,
 }
 
@@ -481,6 +499,127 @@ impl FeedbackService {
         })
     }
 
+    pub async fn reply_feedback(
+        &self,
+        request: ReplyFeedbackRequest,
+    ) -> Result<ReplyFeedbackResponse, FeedbackError> {
+        validate_feedback_id(&request.feedback_id)?;
+        validate_content(&request.content)?;
+        let feedback_id = request.feedback_id.clone();
+        self.ensure_reply_allowed(&feedback_id).await?;
+        let content = request.content.trim().to_string();
+        let idempotency_key = self.reply_idempotency_key(&feedback_id, &content).await?;
+        let capability = self.capability_for(&feedback_id).await?;
+        let body = ReplyRequestBody { content: &content };
+        let response = match self
+            .send_authenticated_existing("feedback:write", |token| {
+                self.client
+                    .post(self.url(&format!("/support/v1/feedback/{feedback_id}/messages"))?)
+                    .bearer_auth(token)
+                    .header("X-Feedback-Capability", &capability)
+                    .header("X-Request-ID", Uuid::new_v4().to_string())
+                    .header("Idempotency-Key", &idempotency_key)
+                    .json(&body)
+                    .build()
+                    .map_err(network_error)
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                if is_capability_error(&error.code) {
+                    let cache = self.message_cache().await?;
+                    self.invalidate_conversation_access(&feedback_id, &cache)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        let replied: ReplyResponseBody = match decode_success(response, StatusCode::CREATED).await {
+            Ok(value) => value,
+            Err(error) => {
+                if is_capability_error(&error.code) {
+                    let cache = self.message_cache().await?;
+                    self.invalidate_conversation_access(&feedback_id, &cache)
+                        .await;
+                }
+                return Err(error);
+            }
+        };
+        if replied.sender_type != FeedbackSender::User
+            || replied.feedback_status != FeedbackStatus::InProgress
+            || Uuid::parse_str(&replied.message_id).is_err()
+            || validate_timestamp(&replied.created_at).is_err()
+        {
+            return Err(FeedbackError::new(
+                "RESPONSE_INVALID",
+                "Feedback service returned an invalid reply",
+                true,
+            ));
+        }
+
+        let message = FeedbackMessage {
+            message_id: replied.message_id,
+            sender: replied.sender_type,
+            content,
+            created_at: replied.created_at,
+        };
+        let cache = self.message_cache().await?;
+        let cached = match cache.load(&feedback_id).await {
+            Ok(cached) => cached,
+            Err(_) => {
+                cache.remove(&feedback_id).await.map_err(|_| {
+                    credential_error(
+                        "CACHE_RESET_FAILED",
+                        "Feedback message cache could not be reset",
+                    )
+                })?;
+                None
+            }
+        };
+        if let Some(mut cached) = cached {
+            if !cached
+                .messages
+                .iter()
+                .any(|existing| existing.message_id == message.message_id)
+            {
+                cached.messages.push(message.clone());
+                cached.messages.sort_by(|left, right| {
+                    left.created_at
+                        .cmp(&right.created_at)
+                        .then_with(|| left.message_id.cmp(&right.message_id))
+                });
+                cache.store(&cached).await.map_err(|_| {
+                    credential_error(
+                        "CACHE_SAVE_FAILED",
+                        "Feedback message cache could not be saved",
+                    )
+                })?;
+            }
+        }
+
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        let mut next = state.stored.clone();
+        next.pending_reply_fingerprints.remove(&feedback_id);
+        next.pending_reply_idempotency_keys.remove(&feedback_id);
+        if let Some(record) = next
+            .inbox_items
+            .iter_mut()
+            .find(|record| record.feedback_id == feedback_id)
+        {
+            record.status = replied.feedback_status;
+            record.updated_at = message.created_at.clone();
+        }
+        self.persist(&next).await?;
+        state.stored = next;
+
+        Ok(ReplyFeedbackResponse {
+            message,
+            feedback_status: replied.feedback_status,
+        })
+    }
+
     async fn synchronize_messages(
         &self,
         feedback_id: &str,
@@ -600,6 +739,21 @@ impl FeedbackService {
             })
     }
 
+    async fn ensure_reply_allowed(&self, feedback_id: &str) -> Result<(), FeedbackError> {
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        if state.stored.inbox_items.iter().any(|record| {
+            record.feedback_id == feedback_id && record.status == FeedbackStatus::Resolved
+        }) {
+            return Err(FeedbackError::new(
+                "FEEDBACK_ALREADY_RESOLVED",
+                "Resolved feedback cannot receive replies",
+                false,
+            ));
+        }
+        Ok(())
+    }
+
     async fn invalidate_conversation_access(&self, feedback_id: &str, cache: &MessageCache) {
         let _ = cache.remove(feedback_id).await;
         let mut state = self.state.lock().await;
@@ -609,6 +763,8 @@ impl FeedbackService {
         let mut next = state.stored.clone();
         next.capabilities.remove(feedback_id);
         next.read_cursors.remove(feedback_id);
+        next.pending_reply_fingerprints.remove(feedback_id);
+        next.pending_reply_idempotency_keys.remove(feedback_id);
         if let Some(record) = next
             .inbox_items
             .iter_mut()
@@ -651,6 +807,37 @@ impl FeedbackService {
         let mut next = state.stored.clone();
         next.pending_create_fingerprint = Some(fingerprint);
         next.pending_create_idempotency_key = Some(key.clone());
+        self.persist(&next).await?;
+        state.stored = next;
+        Ok(key)
+    }
+
+    async fn reply_idempotency_key(
+        &self,
+        feedback_id: &str,
+        content: &str,
+    ) -> Result<String, FeedbackError> {
+        let fingerprint = format!("{:x}", Sha256::digest(content.as_bytes()));
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        if state
+            .stored
+            .pending_reply_fingerprints
+            .get(feedback_id)
+            .map(String::as_str)
+            == Some(fingerprint.as_str())
+        {
+            if let Some(key) = state.stored.pending_reply_idempotency_keys.get(feedback_id) {
+                return Ok(key.clone());
+            }
+        }
+
+        let key = Uuid::new_v4().to_string();
+        let mut next = state.stored.clone();
+        next.pending_reply_fingerprints
+            .insert(feedback_id.to_string(), fingerprint);
+        next.pending_reply_idempotency_keys
+            .insert(feedback_id.to_string(), key.clone());
         self.persist(&next).await?;
         state.stored = next;
         Ok(key)
@@ -1198,8 +1385,9 @@ mod tests {
     use anyhow::{anyhow, Result};
     use async_trait::async_trait;
     use bitfun_product_domains::feedback::{
-        AcknowledgeFeedbackRequest, FeedbackCategory, FeedbackStatus, ListFeedbackRecordsRequest,
-        OpenFeedbackConversationRequest, SubmitFeedbackRequest,
+        AcknowledgeFeedbackRequest, FeedbackCategory, FeedbackRecordSummary, FeedbackStatus,
+        ListFeedbackRecordsRequest, OpenFeedbackConversationRequest, ReplyFeedbackRequest,
+        SubmitFeedbackRequest,
     };
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -1410,6 +1598,124 @@ mod tests {
             .starts_with("POST /support/v1/feedback/11111111-1111-4111-8111-111111111111/ack "));
         drop(captured);
         let _ = tokio::fs::remove_dir_all(cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn reuses_reply_idempotency_key_and_commits_server_status() {
+        let feedback_id = "11111111-1111-4111-8111-111111111111";
+        let message_id = "22222222-2222-4222-8222-222222222222";
+        let responses = vec![
+            json_response(
+                200,
+                r#"{"anonymous_id":"anon","access_token":"fresh","refresh_token":"refresh-2","expires_in":3600,"refresh_expires_in":2592000,"scope":"feedback:write,feedback:read","schema_version":"1"}"#,
+            ),
+            json_response(
+                503,
+                r#"{"error_code":"INTERNAL_ERROR","request_id":"request-failed"}"#,
+            ),
+            json_response(
+                201,
+                &format!(
+                    r#"{{"message_id":"{message_id}","sender_type":"user","created_at":"2026-07-28T03:00:00Z","feedback_status":"in_progress"}}"#,
+                ),
+            ),
+        ];
+        let (base_url, requests) = spawn_server(responses).await;
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            anonymous_id: Some("anon".to_string()),
+            refresh_token: Some("refresh-1".to_string()),
+            capabilities: HashMap::from([(
+                feedback_id.to_string(),
+                "capability-secret".to_string(),
+            )]),
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            ..MemoryStore::default()
+        });
+        let cache_dir = std::env::temp_dir().join(format!(
+            "bitfun-feedback-reply-cache-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let service = FeedbackService::new(
+            Some(base_url),
+            "1.0.0".to_string(),
+            store.clone(),
+            Duration::from_secs(2),
+        )
+        .with_message_cache_dir(cache_dir.clone());
+        let request = ReplyFeedbackRequest {
+            feedback_id: feedback_id.to_string(),
+            content: "  retry safely  ".to_string(),
+        };
+
+        let first = service.reply_feedback(request.clone()).await.unwrap_err();
+        assert_eq!(first.code, "INTERNAL_ERROR");
+        let replied = service.reply_feedback(request).await.unwrap();
+        assert_eq!(replied.message.message_id, message_id);
+        assert_eq!(replied.message.content, "retry safely");
+        assert_eq!(replied.feedback_status, FeedbackStatus::InProgress);
+
+        let captured = requests.lock().unwrap();
+        let replies = captured
+            .iter()
+            .filter(|request| {
+                request.starts_with(&format!(
+                    "POST /support/v1/feedback/{feedback_id}/messages "
+                ))
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(replies.len(), 2);
+        assert_eq!(
+            header(replies[0], "idempotency-key"),
+            header(replies[1], "idempotency-key")
+        );
+        assert_eq!(
+            header(replies[1], "x-feedback-capability").as_deref(),
+            Some("capability-secret")
+        );
+        drop(captured);
+        let persisted: StoredCredentials =
+            serde_json::from_str(store.value.lock().unwrap().as_deref().unwrap()).unwrap();
+        assert!(persisted.pending_reply_fingerprints.is_empty());
+        assert!(persisted.pending_reply_idempotency_keys.is_empty());
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn rejects_replies_to_locally_known_resolved_feedback() {
+        let feedback_id = "11111111-1111-4111-8111-111111111111";
+        let stored = StoredCredentials {
+            inbox_items: vec![FeedbackRecordSummary {
+                feedback_id: feedback_id.to_string(),
+                category: FeedbackCategory::Other,
+                status: FeedbackStatus::Resolved,
+                has_new_reply: false,
+                created_at: "2026-07-28T01:00:00Z".to_string(),
+                updated_at: "2026-07-28T02:00:00Z".to_string(),
+                can_open: true,
+            }],
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            ..MemoryStore::default()
+        });
+        let service =
+            FeedbackService::new(None, "1.0.0".to_string(), store, Duration::from_secs(2));
+
+        let error = service
+            .reply_feedback(ReplyFeedbackRequest {
+                feedback_id: feedback_id.to_string(),
+                content: "should not send".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, "FEEDBACK_ALREADY_RESOLVED");
     }
 
     #[tokio::test]

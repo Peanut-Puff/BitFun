@@ -14,12 +14,18 @@ interface FeedbackInboxViewProps {
   wide: boolean;
   selectedId: string | null;
   onSelect: (feedbackId: string | null) => void;
+  replySending: boolean;
+  resetDraftVersion: number;
+  onReplyStateChange: (state: { hasDraft: boolean; sending: boolean }) => void;
 }
 
 export const FeedbackInboxView: React.FC<FeedbackInboxViewProps> = ({
   wide,
   selectedId,
   onSelect,
+  replySending,
+  resetDraftVersion,
+  onReplyStateChange,
 }) => {
   const { t, formatDate } = useI18n('common');
   const records = useFeedbackInboxStore(state => state.records);
@@ -47,7 +53,7 @@ export const FeedbackInboxView: React.FC<FeedbackInboxViewProps> = ({
               type="button"
               variant="ghost"
               size="small"
-              disabled={loading || loadingMore}
+              disabled={loading || loadingMore || replySending}
               onClick={() => void refresh(true)}
             >
               <RefreshCw size={14} aria-hidden="true" />
@@ -88,6 +94,7 @@ export const FeedbackInboxView: React.FC<FeedbackInboxViewProps> = ({
                   type="button"
                   role="listitem"
                   className={`bitfun-feedback__record${selectedId === record.feedbackId ? ' is-selected' : ''}`}
+                  disabled={replySending}
                   onClick={() => onSelect(record.feedbackId)}
                 >
                   <span className="bitfun-feedback__record-topline">
@@ -116,7 +123,7 @@ export const FeedbackInboxView: React.FC<FeedbackInboxViewProps> = ({
                 <Button
                   type="button"
                   variant="secondary"
-                  disabled={loading || loadingMore}
+                  disabled={loading || loadingMore || replySending}
                   isLoading={loadingMore}
                   onClick={() => void loadMore()}
                 >
@@ -132,6 +139,9 @@ export const FeedbackInboxView: React.FC<FeedbackInboxViewProps> = ({
           wide={wide}
           record={selected}
           onBack={() => onSelect(null)}
+          replySending={replySending}
+          resetDraftVersion={resetDraftVersion}
+          onReplyStateChange={onReplyStateChange}
         />
       ) : null}
     </div>
@@ -142,9 +152,19 @@ interface FeedbackSummaryDetailProps {
   wide: boolean;
   record: FeedbackRecordSummary | null;
   onBack: () => void;
+  replySending: boolean;
+  resetDraftVersion: number;
+  onReplyStateChange: (state: { hasDraft: boolean; sending: boolean }) => void;
 }
 
-const FeedbackSummaryDetail: React.FC<FeedbackSummaryDetailProps> = ({ wide, record, onBack }) => {
+const FeedbackSummaryDetail: React.FC<FeedbackSummaryDetailProps> = ({
+  wide,
+  record,
+  onBack,
+  replySending,
+  resetDraftVersion,
+  onReplyStateChange,
+}) => {
   const { t, formatDate } = useI18n('common');
   if (!record) {
     return (
@@ -162,6 +182,7 @@ const FeedbackSummaryDetail: React.FC<FeedbackSummaryDetailProps> = ({ wide, rec
           <button
             type="button"
             className="bitfun-feedback__back"
+            disabled={replySending}
             onClick={onBack}
             aria-label={t('feedback.inbox.back')}
           >
@@ -178,7 +199,12 @@ const FeedbackSummaryDetail: React.FC<FeedbackSummaryDetailProps> = ({ wide, rec
       </header>
       <div className="bitfun-feedback__detail-body">
         {record.canOpen ? (
-          <FeedbackConversationView record={record} />
+          <FeedbackConversationView
+            key={record.feedbackId}
+            record={record}
+            resetDraftVersion={resetDraftVersion}
+            onInteractionStateChange={onReplyStateChange}
+          />
         ) : (
           <div className="bitfun-feedback__inaccessible" role="status">
             <strong>{t('feedback.inbox.inaccessibleTitle')}</strong>

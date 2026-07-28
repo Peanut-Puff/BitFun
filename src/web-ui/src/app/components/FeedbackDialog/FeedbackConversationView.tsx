@@ -1,21 +1,33 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { LockKeyhole, RefreshCw } from 'lucide-react';
-import { Button, IconButton } from '@/component-library';
+import { LockKeyhole, RefreshCw, Send } from 'lucide-react';
+import { Button, ConfirmDialog, IconButton, Textarea } from '@/component-library';
+import { usePrivacy } from '@/app/components/Privacy/PrivacyContext';
 import {
   feedbackAPI,
   FeedbackApiError,
   type FeedbackMessage,
   type FeedbackRecordSummary,
+  feedbackContentLength,
+  truncateFeedbackContent,
 } from '@/infrastructure/api';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { useFeedbackInboxStore } from './feedbackInboxStore';
 
 interface FeedbackConversationViewProps {
   record: FeedbackRecordSummary;
+  resetDraftVersion: number;
+  onInteractionStateChange: (state: { hasDraft: boolean; sending: boolean }) => void;
 }
 
-export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> = ({ record }) => {
+type ReplyError = FeedbackApiError | 'PRIVACY_SAVE_FAILED' | null;
+
+export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> = ({
+  record,
+  resetDraftVersion,
+  onInteractionStateChange,
+}) => {
   const { t, formatDate } = useI18n('common');
+  const { status, accept } = usePrivacy();
   const [messages, setMessages] = useState<FeedbackMessage[]>([]);
   const [nextCursor, setNextCursor] = useState<string>();
   const [hasMore, setHasMore] = useState(false);
@@ -24,6 +36,11 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<FeedbackApiError | null>(null);
   const [ackError, setAckError] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [draftTruncated, setDraftTruncated] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [replyError, setReplyError] = useState<ReplyError>(null);
+  const [showConsent, setShowConsent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const visibleAdminTimesRef = useRef(new Set<string>());
@@ -34,6 +51,23 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
   const applyServerStatus = useFeedbackInboxStore(state => state.applyServerStatus);
   const markInaccessible = useFeedbackInboxStore(state => state.markInaccessible);
   const refreshInbox = useFeedbackInboxStore(state => state.refresh);
+  const draftLength = feedbackContentLength(draft);
+  const canReply = Boolean(draft.trim()) && !sending && record.status !== 'resolved';
+
+  useEffect(() => {
+    onInteractionStateChange({ hasDraft: Boolean(draft.trim()), sending });
+  }, [draft, onInteractionStateChange, sending]);
+
+  useEffect(() => () => {
+    onInteractionStateChange({ hasDraft: false, sending: false });
+  }, [onInteractionStateChange]);
+
+  useEffect(() => {
+    setDraft('');
+    setDraftTruncated(false);
+    setReplyError(null);
+    setShowConsent(false);
+  }, [resetDraftVersion]);
 
   const handleConversationError = useCallback((caught: unknown) => {
     const normalized = caught instanceof FeedbackApiError
@@ -148,6 +182,82 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
     void flushReadAcknowledgement();
   }, [flushReadAcknowledgement]);
 
+  const executeReply = useCallback(async (content: string) => {
+    try {
+      const result = await feedbackAPI.replyFeedback(record.feedbackId, content);
+      if (!mountedRef.current) return;
+      setMessages(current => mergeMessages(current, [result.message]));
+      setDraft('');
+      setDraftTruncated(false);
+      setReplyError(null);
+      applyServerStatus(record.feedbackId, result.feedbackStatus);
+      requestAnimationFrame(() => {
+        const container = scrollRef.current;
+        if (container) container.scrollTop = container.scrollHeight;
+      });
+      void refreshInbox(true);
+    } catch (caught) {
+      if (!mountedRef.current) return;
+      const normalized = caught instanceof FeedbackApiError
+        ? caught
+        : new FeedbackApiError('SERVICE_UNAVAILABLE', 'Feedback service is unavailable', true);
+      if (isConversationAccessError(normalized.code)) {
+        markInaccessible(record.feedbackId);
+      }
+      setReplyError(normalized);
+    }
+  }, [applyServerStatus, markInaccessible, record.feedbackId, refreshInbox]);
+
+  const sendReply = useCallback(async () => {
+    const content = draft.trim();
+    if (!content || sending || record.status === 'resolved') return;
+    setSending(true);
+    setReplyError(null);
+    await executeReply(content);
+    if (mountedRef.current) setSending(false);
+  }, [draft, executeReply, record.status, sending]);
+
+  const requestReply = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!canReply) return;
+    if (status?.effectiveMode !== 'full') {
+      setShowConsent(true);
+      return;
+    }
+    void sendReply();
+  };
+
+  const acceptAndSend = async () => {
+    const content = draft.trim();
+    if (!content || sending || !status?.policy) return;
+    setSending(true);
+    setReplyError(null);
+    try {
+      await accept({
+        policyVersion: status.policy.policyVersion,
+        consentVersion: status.policy.consentVersion,
+        documentSha256: status.policy.documentSha256,
+        locale: status.policy.locale,
+      });
+    } catch {
+      if (mountedRef.current) {
+        setReplyError('PRIVACY_SAVE_FAILED');
+        setSending(false);
+      }
+      return;
+    }
+    if (mountedRef.current) setShowConsent(false);
+    await executeReply(content);
+    if (mountedRef.current) setSending(false);
+  };
+
+  const handleDraftChange = (value: string) => {
+    const truncated = truncateFeedbackContent(value);
+    setDraftTruncated(truncated !== value);
+    setDraft(truncated);
+    setReplyError(null);
+  };
+
   useEffect(() => {
     mountedRef.current = true;
     setMessages([]);
@@ -209,7 +319,7 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
           size="small"
           tooltip={t('feedback.conversation.refresh')}
           aria-label={t('feedback.conversation.refresh')}
-          disabled={loading || refreshing || loadingEarlier}
+          disabled={loading || refreshing || loadingEarlier || sending}
           isLoading={refreshing}
           onClick={() => void loadLatest(true)}
         >
@@ -228,7 +338,13 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
         {error ? (
           <div className="bitfun-feedback__message-error" role="alert">
             <span>{conversationErrorText(error.code, t)}</span>
-            <Button type="button" variant="ghost" size="small" onClick={() => void loadLatest(true)}>
+            <Button
+              type="button"
+              variant="ghost"
+              size="small"
+              disabled={sending}
+              onClick={() => void loadLatest(true)}
+            >
               {t('feedback.actions.retry')}
             </Button>
           </div>
@@ -266,7 +382,51 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
           <LockKeyhole size={14} aria-hidden="true" />
           {t('feedback.conversation.resolvedReadonly')}
         </div>
-      ) : null}
+      ) : (
+        <form className="bitfun-feedback__reply" onSubmit={requestReply}>
+          <Textarea
+            value={draft}
+            rows={3}
+            disabled={sending}
+            aria-label={t('feedback.reply.input')}
+            placeholder={t('feedback.reply.placeholder')}
+            onChange={event => handleDraftChange(event.target.value)}
+          />
+          <div className="bitfun-feedback__reply-meta" aria-live="polite">
+            <span>{draftTruncated ? t('feedback.contentTruncated') : ''}</span>
+            <span>{draftLength}/2000</span>
+          </div>
+          {replyError ? (
+            <div className="bitfun-feedback__reply-error" role="alert">
+              {replyErrorText(replyError, t)}
+            </div>
+          ) : null}
+          <div className="bitfun-feedback__reply-actions">
+            <Button type="submit" disabled={!canReply} isLoading={sending}>
+              <Send size={15} aria-hidden="true" />
+              {replyError instanceof FeedbackApiError && replyError.retryable
+                ? t('feedback.actions.retry')
+                : t('feedback.reply.send')}
+            </Button>
+          </div>
+        </form>
+      )}
+      <ConfirmDialog
+        isOpen={showConsent}
+        onClose={() => {
+          if (!sending) setShowConsent(false);
+        }}
+        onConfirm={() => void acceptAndSend()}
+        title={t('feedback.reply.consentTitle')}
+        message={replyError === 'PRIVACY_SAVE_FAILED'
+          ? t('feedback.reply.consentSaveFailed')
+          : t('feedback.reply.consentMessage')}
+        confirmText={t('feedback.reply.consentConfirm')}
+        cancelText={t('feedback.actions.cancel')}
+        confirmDisabled={sending}
+        cancelDisabled={sending}
+        confirmLoading={sending}
+      />
     </div>
   );
 };
@@ -307,6 +467,20 @@ function conversationErrorText(code: string, t: (key: string) => string): string
     return t('feedback.conversation.cacheFailed');
   }
   return t('feedback.conversation.syncFailed');
+}
+
+function replyErrorText(error: ReplyError, t: (key: string, values?: Record<string, unknown>) => string): string {
+  if (!error) return '';
+  if (error === 'PRIVACY_SAVE_FAILED') return t('feedback.reply.privacySaveFailed');
+  if (error.code === 'FEEDBACK_ALREADY_RESOLVED') return t('feedback.reply.resolved');
+  if (error.code === 'RATE_LIMITED' || error.code === 'FEEDBACK_QUOTA_EXCEEDED') {
+    return t('feedback.reply.rateLimited', { seconds: error.retryAfterSeconds ?? 0 });
+  }
+  if (error.code === 'REQUEST_TIMEOUT') return t('feedback.reply.timeout');
+  if (error.code === 'NETWORK_ERROR' || error.code === 'SERVICE_UNAVAILABLE') {
+    return t('feedback.reply.network');
+  }
+  return t('feedback.reply.failed', { code: error.code });
 }
 
 function formatMessageDate(
