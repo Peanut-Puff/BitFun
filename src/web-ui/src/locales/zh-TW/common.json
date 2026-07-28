@@ -90,6 +90,59 @@
     "markViewedFailed": "查看狀態未能儲存，下次可能仍顯示「已更新」。",
     "cancel": "取消"
   },
+  "feedback": {
+    "category": "反饋分類",
+    "categoryPlaceholder": "請選擇分類",
+    "content": "反饋內容",
+    "contentPlaceholder": "請描述你遇到的問題、建議或疑問",
+    "contentTruncated": "已保留前 2000 字",
+    "categories": {
+      "runtimeError": "執行錯誤",
+      "featureRequest": "功能建議",
+      "usageQuestion": "使用問題",
+      "other": "其他"
+    },
+    "correlation": {
+      "label": "關聯目前工作階段",
+      "description": "傳送目前工作階段的不可逆雜湊，用於定位本次反饋。",
+      "unavailable": "目前沒有可關聯的工作階段。"
+    },
+    "privacyConsent": "我已閱讀並同意《隱私聲明》",
+    "viewPrivacy": "查看隱私聲明",
+    "actions": {
+      "cancel": "取消",
+      "submit": "提交反饋",
+      "retry": "重試提交",
+      "gitcode": "前往 GitCode"
+    },
+    "complete": {
+      "title": "反饋已提交",
+      "description": "反饋存取憑證已安全儲存。"
+    },
+    "exit": {
+      "title": "反饋仍在提交",
+      "message": "繼續等待可保留本次提交結果；仍然退出不會承諾取消已經送出的請求。",
+      "quit": "仍然退出",
+      "wait": "繼續等待"
+    },
+    "discard": {
+      "title": "放棄本次反饋？",
+      "message": "分類、正文、關聯選項或隱私勾選尚未提交。關閉後這些內容不會保留。",
+      "confirm": "放棄反饋",
+      "continue": "繼續填寫"
+    },
+    "errors": {
+      "contentRequired": "請輸入反饋內容",
+      "privacySave": "隱私同意未能儲存，反饋尚未傳送。目前仍按未同意規則執行。",
+      "capabilitySave": "反饋已由服務端接收，但存取憑證未能安全儲存。請直接重試，不要修改內容。",
+      "rateLimited": "提交過於頻繁，請在 {{seconds}} 秒後重試。",
+      "notConfigured": "目前版本未設定正式反饋服務，可前往 GitCode。",
+      "timeout": "反饋服務回應逾時，請重試。",
+      "network": "暫時無法連線反饋服務，請檢查網路後重試。",
+      "gitcode": "未能開啟 GitCode，請重試。表單內容仍會保留。",
+      "generic": "反饋提交失敗（{{code}}），請重試或前往 GitCode。"
+    }
+  },
   "nav": {
     "aria": {
       "navControl": "導航控制",

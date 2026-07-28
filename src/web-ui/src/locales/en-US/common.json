@@ -90,6 +90,59 @@
     "markViewedFailed": "The viewed state could not be saved, so Updated may appear again.",
     "cancel": "Cancel"
   },
+  "feedback": {
+    "category": "Category",
+    "categoryPlaceholder": "Select a category",
+    "content": "Feedback",
+    "contentPlaceholder": "Describe the problem, suggestion, or question",
+    "contentTruncated": "Only the first 2000 characters were kept",
+    "categories": {
+      "runtimeError": "Runtime error",
+      "featureRequest": "Feature request",
+      "usageQuestion": "Usage question",
+      "other": "Other"
+    },
+    "correlation": {
+      "label": "Link the current session",
+      "description": "Send an irreversible hash of the current session to help locate this feedback.",
+      "unavailable": "There is no current session to link."
+    },
+    "privacyConsent": "I have read and agree to the Privacy Statement",
+    "viewPrivacy": "View privacy statement",
+    "actions": {
+      "cancel": "Cancel",
+      "submit": "Submit feedback",
+      "retry": "Retry submission",
+      "gitcode": "Open GitCode"
+    },
+    "complete": {
+      "title": "Feedback submitted",
+      "description": "The feedback access credential was saved securely."
+    },
+    "exit": {
+      "title": "Feedback is still submitting",
+      "message": "Continue waiting to preserve the result. Exiting anyway cannot guarantee cancellation of a request already sent.",
+      "quit": "Exit anyway",
+      "wait": "Continue waiting"
+    },
+    "discard": {
+      "title": "Discard this feedback?",
+      "message": "The category, content, related-session option, or privacy selection has not been submitted and will not be kept.",
+      "confirm": "Discard feedback",
+      "continue": "Continue editing"
+    },
+    "errors": {
+      "contentRequired": "Enter feedback content",
+      "privacySave": "Privacy consent could not be saved, so the feedback was not sent. Privacy-not-accepted rules remain active.",
+      "capabilitySave": "The service received the feedback, but its access credential could not be saved securely. Retry without editing the content.",
+      "rateLimited": "Too many submissions. Try again in {{seconds}} seconds.",
+      "notConfigured": "This build has no production feedback service configured. GitCode remains available.",
+      "timeout": "The feedback service timed out. Try again.",
+      "network": "The feedback service is currently unreachable. Check the network and try again.",
+      "gitcode": "GitCode could not be opened. Try again; the form remains unchanged.",
+      "generic": "Feedback submission failed ({{code}}). Try again or use GitCode."
+    }
+  },
   "nav": {
     "aria": {
       "navControl": "Navigation controls",

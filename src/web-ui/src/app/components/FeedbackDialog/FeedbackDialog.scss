@@ -1,0 +1,150 @@
+.bitfun-feedback__modal-content {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.bitfun-feedback__form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+  height: clamp(420px, 64vh, 620px);
+  padding: 22px 26px 24px;
+  overflow-y: auto;
+}
+
+.bitfun-feedback__field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+
+  > label {
+    color: var(--color-text-secondary);
+    font-size: var(--font-size-sm);
+    font-weight: var(--font-weight-medium);
+
+    span {
+      margin-left: 3px;
+      color: var(--color-error);
+    }
+  }
+}
+
+.bitfun-feedback__content-field {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 180px;
+
+  .bitfun-textarea {
+    flex: 1;
+  }
+
+  .bitfun-textarea__wrapper,
+  .bitfun-textarea__field {
+    height: 100%;
+    min-height: 170px;
+  }
+}
+
+.bitfun-feedback__content-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 18px;
+  padding-top: 5px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.bitfun-feedback__correlation {
+  padding: 13px 0;
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.bitfun-feedback__privacy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.bitfun-feedback__error {
+  padding: 10px 12px;
+  border-left: 3px solid var(--color-error);
+  background: var(--element-bg-subtle);
+  color: var(--color-error);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.bitfun-feedback__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+
+  .btn {
+    min-width: 96px;
+  }
+}
+
+.bitfun-feedback__action-spacer {
+  flex: 1;
+}
+
+.bitfun-feedback__complete {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: min(460px, 64vh);
+  padding: 32px;
+  color: var(--color-text-secondary);
+  text-align: center;
+
+  > svg {
+    color: var(--color-success);
+  }
+
+  > strong {
+    color: var(--color-text-primary);
+    font-size: var(--font-size-lg);
+  }
+
+  > span {
+    max-width: 440px;
+    line-height: 1.6;
+  }
+
+  > .btn {
+    min-width: 112px;
+    margin-top: 10px;
+  }
+}
+
+@media (max-width: 680px), (max-height: 540px) {
+  .bitfun-feedback__form {
+    height: min(72vh, 520px);
+    padding: 18px;
+  }
+
+  .bitfun-feedback__privacy,
+  .bitfun-feedback__actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+
+  .bitfun-feedback__privacy {
+    flex-direction: column;
+  }
+
+  .bitfun-feedback__action-spacer {
+    display: none;
+  }
+}

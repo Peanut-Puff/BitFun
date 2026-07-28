@@ -92,6 +92,17 @@ privacy = [
     "dep:bitfun-product-domains",
     "sha2",
 ]
+feedback = [
+    "aes-gcm",
+    "anyhow",
+    "async-trait",
+    "chrono",
+    "dep:bitfun-product-domains",
+    "rand",
+    "reqwest",
+    "sha2",
+    "uuid",
+]
 function-agents = [
     "bitfun-product-domains/function-agents",
     "dep:bitfun-product-domains",
@@ -220,6 +231,7 @@ product-full = [
     "debug-log",
     "deep-research",
     "file-watch",
+    "feedback",
     "function-agents",
     "git",
     "miniapp-runtime",

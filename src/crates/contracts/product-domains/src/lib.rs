@@ -4,6 +4,7 @@
 //! the full BitFun core runtime assembly.
 
 pub mod canvas;
+pub mod feedback;
 pub mod privacy;
 
 #[cfg(feature = "external-sources")]

@@ -35,6 +35,7 @@ import { SSHContext } from '@/features/ssh-remote/SSHRemoteContext';
 import { shortcutManager, parseStoredKeybindings } from '@/infrastructure/services/ShortcutManager';
 import { useSessionModeStore } from '../stores/sessionModeStore';
 import { isMacOSDesktopRuntime } from '@/infrastructure/runtime';
+import { confirmCriticalOperationExit } from '@/shared/services/criticalOperationExitGuard';
 import './AppLayout.scss';
 
 type TransitionDirection = 'entering' | 'returning' | null;
@@ -473,21 +474,27 @@ const AppLayout: React.FC<AppLayoutProps> = ({ className = '' }) => {
                 showCancel: true,
               });
               if (shouldQuit) {
-                await persistInterruptedTurnsForExit();
-                await systemAPI.quitApp();
+                if (await confirmCriticalOperationExit()) {
+                  await persistInterruptedTurnsForExit();
+                  await systemAPI.quitApp();
+                }
               } else {
                 await systemAPI.minimizeToTray();
               }
             } else {
               // quit
-              await persistInterruptedTurnsForExit();
-              await systemAPI.quitApp();
+              if (await confirmCriticalOperationExit()) {
+                await persistInterruptedTurnsForExit();
+                await systemAPI.quitApp();
+              }
             }
           } catch (error) {
             log.error('Failed to handle close request', { behavior, error });
             try {
-              await persistInterruptedTurnsForExit();
-              await systemAPI.quitApp();
+              if (await confirmCriticalOperationExit()) {
+                await persistInterruptedTurnsForExit();
+                await systemAPI.quitApp();
+              }
             } catch { /* ignore */ }
           } finally {
             handlingClose = false;

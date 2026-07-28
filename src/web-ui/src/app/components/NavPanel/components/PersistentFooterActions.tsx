@@ -39,6 +39,7 @@ const AccountLoginDialog = lazy(() => import('../../AccountLoginDialog'));
 const AboutDialog = lazy(() =>
   import('../../AboutDialog').then(module => ({ default: module.AboutDialog }))
 );
+const FeedbackDialog = lazy(() => import('../../FeedbackDialog'));
 
 const PersistentFooterActions: React.FC = () => {
   const { t } = useI18n('common');
@@ -75,6 +76,7 @@ const PersistentFooterActions: React.FC = () => {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuClosing, setMenuClosing] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
   const [showAccountLogin, setShowAccountLogin] = useState(false);
   const [showRemoteConnect, setShowRemoteConnect] = useState(false);
   const [showRemoteDisclaimer, setShowRemoteDisclaimer] = useState(false);
@@ -149,9 +151,18 @@ const PersistentFooterActions: React.FC = () => {
     setShowAbout(true);
   };
 
-  const handleFeedback = useCallback(() => {
+  const handleFeedback = useCallback(async () => {
     closeMenu();
-    void systemAPI.openExternal('https://gitcode.com/OpenHarmonyPCDeveloper/BitFun/issues');
+    try {
+      const systemInfo = await systemAPI.getSystemInfo();
+      if (systemInfo.platform === 'openharmony') {
+        setShowFeedback(true);
+        return;
+      }
+    } catch {
+      // Web and older desktop hosts retain the external feedback behavior.
+    }
+    await systemAPI.openExternal('https://gitcode.com/OpenHarmonyPCDeveloper/BitFun/issues');
   }, [closeMenu]);
 
   const handleFloatingMode = () => {
@@ -352,6 +363,11 @@ const PersistentFooterActions: React.FC = () => {
       {showAbout && (
         <Suspense fallback={null}>
           <AboutDialog isOpen={showAbout} onClose={() => setShowAbout(false)} />
+        </Suspense>
+      )}
+      {showFeedback && (
+        <Suspense fallback={null}>
+          <FeedbackDialog isOpen={showFeedback} onClose={() => setShowFeedback(false)} />
         </Suspense>
       )}
       {showAccountLogin && (

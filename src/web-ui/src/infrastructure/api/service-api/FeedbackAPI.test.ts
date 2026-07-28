@@ -1,0 +1,58 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const invokeMock = vi.fn();
+
+vi.mock('./ApiClient', () => ({
+  api: { invoke: invokeMock },
+}));
+
+vi.mock('@/flow_chat/store/FlowChatStore', () => ({
+  flowChatStore: { getState: () => ({ activeSessionId: null }) },
+}));
+
+describe('FeedbackAPI', () => {
+  beforeEach(() => invokeMock.mockReset());
+
+  it('uses a structured request and disables adapter retries', async () => {
+    const { feedbackAPI } = await import('./FeedbackAPI');
+    invokeMock.mockResolvedValue({
+      feedbackId: 'feedback-1',
+      status: 'submitted',
+      inboxCursor: 'cursor-1',
+    });
+
+    await feedbackAPI.submitFeedback({
+      category: 'other',
+      content: 'hello',
+      includeCorrelation: false,
+    });
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'submit_feedback',
+      { request: { category: 'other', content: 'hello', sessionIdHash: undefined } },
+      { retries: 0 },
+    );
+  });
+
+  it('truncates by Unicode characters without splitting surrogate pairs', async () => {
+    const { feedbackContentLength, truncateFeedbackContent } = await import('./FeedbackAPI');
+    const truncated = truncateFeedbackContent(`${'中'.repeat(1_999)}😀tail`);
+    expect(feedbackContentLength(truncated)).toBe(2_000);
+    expect(truncated.endsWith('😀')).toBe(true);
+  });
+
+  it('normalizes command errors without requiring diagnostic text', async () => {
+    const { normalizeFeedbackError } = await import('./FeedbackAPI');
+    const caught = normalizeFeedbackError({
+      code: 'RATE_LIMITED',
+      message: 'server diagnostic',
+      retryable: true,
+      requestId: 'request-1',
+      retryAfterSeconds: 30,
+    });
+    expect(caught.code).toBe('RATE_LIMITED');
+    expect(caught.retryable).toBe(true);
+    expect(caught.requestId).toBe('request-1');
+    expect(caught.retryAfterSeconds).toBe(30);
+  });
+});

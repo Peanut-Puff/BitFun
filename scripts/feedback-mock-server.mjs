@@ -1,0 +1,168 @@
+import http from 'node:http';
+import { randomUUID } from 'node:crypto';
+
+const port = Number.parseInt(process.env.BITFUN_FEEDBACK_MOCK_PORT ?? '38971', 10);
+const enrollments = new Map();
+const refreshTokens = new Map();
+const createRequests = new Map();
+const records = new Map();
+let nextFault = null;
+
+const server = http.createServer(async (request, response) => {
+  const requestId = header(request, 'x-request-id') ?? randomUUID();
+  const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+
+  if (request.method === 'GET' && url.pathname === '/health') {
+    return send(response, 200, { status: 'ok' }, requestId);
+  }
+  if (request.method === 'POST' && url.pathname === '/__mock/control') {
+    const body = await readJson(request);
+    nextFault = typeof body.fault === 'string' ? body.fault : null;
+    return send(response, 200, { next_fault: nextFault }, requestId);
+  }
+
+  const fault = takeFault();
+  if (fault === 'timeout') {
+    setTimeout(() => sendError(response, 500, 'INTERNAL_ERROR', requestId), 25_000);
+    return;
+  }
+  if (fault === '403') return sendError(response, 403, 'SCOPE_INSUFFICIENT', requestId);
+  if (fault === '429') return sendError(response, 429, 'RATE_LIMITED', requestId, { 'Retry-After': '30' });
+  if (fault === '5xx') return sendError(response, 503, 'INTERNAL_ERROR', requestId);
+  if (fault === '401') return sendError(response, 401, 'ACCESS_TOKEN_INVALID', requestId);
+
+  if (request.method === 'POST' && url.pathname === '/auth/v1/anonymous/enroll') {
+    const body = await readJson(request);
+    const idempotencyKey = requireUuidHeader(request, response, requestId);
+    if (!idempotencyKey) return;
+    if (typeof body.key !== 'string' || body.key.length === 0) {
+      return sendError(response, 400, 'ENROLL_KEY_REQUIRED', requestId);
+    }
+    const identity = `${body.key}:${idempotencyKey}`;
+    const existing = enrollments.get(identity);
+    if (existing) return send(response, 201, existing, requestId, { 'Idempotency-Replayed': 'true' });
+    const created = tokenPair(randomUUID());
+    enrollments.set(identity, created);
+    refreshTokens.set(created.refresh_token, created.anonymous_id);
+    return send(response, 201, created, requestId, { 'Idempotency-Replayed': 'false' });
+  }
+
+  if (request.method === 'POST' && url.pathname === '/auth/v1/anonymous/token') {
+    const body = await readJson(request);
+    const anonymousId = refreshTokens.get(body.refresh_token);
+    if (!anonymousId) return sendError(response, 401, 'REFRESH_TOKEN_INVALID', requestId);
+    refreshTokens.delete(body.refresh_token);
+    const refreshed = tokenPair(anonymousId);
+    refreshTokens.set(refreshed.refresh_token, anonymousId);
+    return send(response, 200, refreshed, requestId);
+  }
+
+  if (request.method === 'POST' && url.pathname === '/support/v1/feedback') {
+    if (!validBearer(request)) return sendError(response, 401, 'ACCESS_TOKEN_INVALID', requestId);
+    const body = await readJson(request);
+    const idempotencyKey = requireUuidHeader(request, response, requestId);
+    if (!idempotencyKey) return;
+    const fingerprint = JSON.stringify(body);
+    const existing = createRequests.get(idempotencyKey);
+    if (existing && existing.fingerprint !== fingerprint) {
+      return sendError(response, 409, 'FEEDBACK_IDEMPOTENT_CONFLICT', requestId);
+    }
+    if (existing) {
+      return send(response, 201, { ...existing.result, idempotency_replayed: true }, requestId, {
+        'Idempotency-Replayed': 'true',
+      });
+    }
+    if (!['runtime_error', 'feature_request', 'usage_question', 'other'].includes(body.category)) {
+      return sendError(response, 400, 'CATEGORY_INVALID', requestId);
+    }
+    if (typeof body.content !== 'string' || body.content.trim().length === 0) {
+      return sendError(response, 400, 'CONTENT_EMPTY', requestId);
+    }
+    if (Array.from(body.content.trim()).length > 2_000) {
+      return sendError(response, 400, 'CONTENT_TOO_LONG', requestId);
+    }
+    const feedbackId = randomUUID();
+    const result = {
+      feedback_id: feedbackId,
+      capability_token: randomUUID(),
+      status: 'submitted',
+      inbox_cursor: new Date().toISOString(),
+      schema_version: '1.0.0',
+    };
+    if (fault === 'capability_missing') delete result.capability_token;
+    createRequests.set(idempotencyKey, { fingerprint, result });
+    records.set(feedbackId, { ...body, ...result });
+    return send(response, 201, result, requestId, { 'Idempotency-Replayed': 'false' });
+  }
+
+  return sendError(response, 404, 'NOT_FOUND', requestId);
+});
+
+server.listen(port, '127.0.0.1', () => {
+  process.stdout.write(`Feedback mock listening at http://127.0.0.1:${port}\n`);
+});
+
+function tokenPair(anonymousId) {
+  return {
+    anonymous_id: anonymousId,
+    access_token: `access-${randomUUID()}`,
+    refresh_token: `refresh-${randomUUID()}`,
+    expires_in: 3_600,
+    refresh_expires_in: 2_592_000,
+    scope: 'feedback:write,feedback:read',
+    schema_version: '1.0.0',
+  };
+}
+
+function takeFault() {
+  const fault = nextFault;
+  nextFault = null;
+  return fault;
+}
+
+function validBearer(request) {
+  return /^Bearer access-/.test(header(request, 'authorization') ?? '');
+}
+
+function requireUuidHeader(request, response, requestId) {
+  const value = header(request, 'idempotency-key');
+  if (!value || !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value)) {
+    sendError(response, 409, 'IDEMPOTENCY_KEY_INVALID', requestId);
+    return null;
+  }
+  return value;
+}
+
+function header(request, name) {
+  const value = request.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+async function readJson(request) {
+  const chunks = [];
+  for await (const chunk of request) chunks.push(chunk);
+  if (chunks.length === 0) return {};
+  try {
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function sendError(response, status, code, requestId, headers = {}) {
+  send(response, status, {
+    error_code: code,
+    error_message: 'Mock diagnostic text must never be shown directly by the client.',
+    request_id: requestId,
+  }, requestId, headers);
+}
+
+function send(response, status, body, requestId, headers = {}) {
+  response.writeHead(status, {
+    'Cache-Control': 'no-store',
+    'Content-Type': 'application/json',
+    'X-Request-ID': requestId,
+    ...headers,
+  });
+  response.end(JSON.stringify(body));
+}

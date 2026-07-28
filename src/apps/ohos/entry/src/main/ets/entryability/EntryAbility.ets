@@ -18,6 +18,7 @@ import { updateManager } from '@kit.AppGalleryKit';
 import RustModule from 'libbitfun_desktop_lib.so';
 import { CommonUtils } from '../utils/CommonUtils';
 import { runDeveco } from '../utils/DevecoStart';
+import { FeedbackCredentialStore } from '../utils/FeedbackCredentialStore';
 
 
 const DOMAIN = 0x0000;
@@ -44,6 +45,11 @@ export default class EntryAbility extends RustAbility {
     AppGlobal.mContext = this.context;
     const DOMAIN_NUMBER: number = 0xFF00;
     const TAG: string = '[BitfunUIAbilityComponents]';
+    const feedbackCredentialStore = new FeedbackCredentialStore();
+    RustModule.registerArktsFunction('feedback_secure_credentials', async (
+      _err: Error,
+      arg: string
+    ): Promise<string> => feedbackCredentialStore.handle(arg));
     RustModule.registerArktsFunction('open_dialog_file', async (err: Error, arg: string): Promise<string> => {
       let res = await CommonUtils.open_file_dialog();
       return res;

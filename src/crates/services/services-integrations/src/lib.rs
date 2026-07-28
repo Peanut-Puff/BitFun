@@ -21,6 +21,9 @@ pub mod deep_research;
 #[cfg(feature = "file-watch")]
 pub mod file_watch;
 
+#[cfg(feature = "feedback")]
+pub mod feedback;
+
 #[cfg(feature = "function-agents")]
 pub mod function_agents;
 

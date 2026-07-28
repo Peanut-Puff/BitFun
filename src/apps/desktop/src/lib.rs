@@ -383,6 +383,24 @@ pub async fn _run() {
     #[cfg(not(target_env = "ohos"))]
     let privacy_service_state = api::privacy_api::PrivacyServiceState::disabled();
 
+    #[cfg(target_env = "ohos")]
+    let feedback_service_state = {
+        use bitfun_services_integrations::feedback::FeedbackService;
+        use std::sync::Arc;
+
+        let credential_store =
+            Arc::new(api::ohos::feedback_credentials::OhosFeedbackCredentialStore::new());
+        api::feedback_api::FeedbackServiceState::enabled(
+            FeedbackService::from_environment_with_credential_store(
+                env!("CARGO_PKG_VERSION"),
+                credential_store,
+            ),
+        )
+    };
+
+    #[cfg(not(target_env = "ohos"))]
+    let feedback_service_state = api::feedback_api::FeedbackServiceState::disabled();
+
     let step_started = Instant::now();
     let startup_log_level = resolve_runtime_log_level(log_config.level).await;
     startup_trace.record_elapsed_step(
@@ -493,6 +511,7 @@ pub async fn _run() {
         .manage(scheduler)
         .manage(terminal_state)
         .manage(privacy_service_state)
+        .manage(feedback_service_state)
         .manage(startup_trace.clone())
         .on_page_load(|webview, payload| {
             let label = webview.label();
@@ -939,6 +958,7 @@ pub async fn _run() {
             api::privacy_api::privacy_enter_not_accepted,
             api::privacy_api::privacy_mark_viewed,
             api::privacy_api::privacy_apply_collection_policy,
+            api::feedback_api::submit_feedback,
             api::agentic_api::create_session,
             api::agentic_api::update_session_model,
             api::agentic_api::update_session_title,
