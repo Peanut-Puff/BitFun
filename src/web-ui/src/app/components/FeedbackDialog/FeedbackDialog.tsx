@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ExternalLink, Send } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, ExternalLink, List, Send, SquarePen } from 'lucide-react';
 import {
   Button,
   Checkbox,
@@ -23,6 +23,8 @@ import {
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { createLogger } from '@/shared/utils/logger';
 import { registerCriticalOperationExitGuard } from '@/shared/services/criticalOperationExitGuard';
+import { FeedbackInboxView } from './FeedbackInboxView';
+import { useFeedbackInboxStore } from './feedbackInboxStore';
 import './FeedbackDialog.scss';
 
 const log = createLogger('FeedbackDialog');
@@ -38,6 +40,11 @@ type SubmissionError = FeedbackApiError | 'PRIVACY_SAVE_FAILED' | null;
 export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose }) => {
   const { t } = useI18n('common');
   const { status, accept } = usePrivacy();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const refreshInbox = useFeedbackInboxStore(state => state.refresh);
+  const [activeView, setActiveView] = useState<'create' | 'inbox'>('create');
+  const [selectedFeedbackId, setSelectedFeedbackId] = useState<string | null>(null);
+  const [wideLayout, setWideLayout] = useState(false);
   const [category, setCategory] = useState<FeedbackCategory | ''>('');
   const [content, setContent] = useState('');
   const [includeCorrelation, setIncludeCorrelation] = useState(false);
@@ -90,6 +97,20 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
     return () => window.clearInterval(timer);
   }, [retryWaitSeconds]);
 
+  useEffect(() => {
+    if (!isOpen || !containerRef.current) return;
+    const element = containerRef.current;
+    const update = (width: number) => setWideLayout(width >= 840);
+    update(element.getBoundingClientRect().width);
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(entries => {
+      const entry = entries[0];
+      if (entry) update(entry.contentRect.width);
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [isOpen]);
+
   const reset = useCallback(() => {
     setCategory('');
     setContent('');
@@ -103,6 +124,8 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
     setWasTruncated(false);
     setCompleted(false);
     setRetryWaitSeconds(0);
+    setActiveView('create');
+    setSelectedFeedbackId(null);
   }, []);
 
   const closeImmediately = useCallback(() => {
@@ -152,6 +175,7 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
         }
       }
       await submitPreparedFeedback();
+      await refreshInbox(true);
       setCompleted(true);
     } catch (error) {
       const feedbackError = asFeedbackError(error);
@@ -162,6 +186,12 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const changeView = (view: 'create' | 'inbox') => {
+    if (submitting) return;
+    setActiveView(view);
+    if (view === 'inbox') void refreshInbox(true);
   };
 
   const openGitCode = () => {
@@ -197,7 +227,8 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
         isOpen={isOpen}
         onClose={requestClose}
         title={t('header.feedback')}
-        size="large"
+        size="xlarge"
+        overlayClassName="bitfun-feedback__overlay"
         contentClassName="bitfun-feedback__modal-content"
         showCloseButton={!submitting}
         closeOnOverlayClick={!submitting}
@@ -211,7 +242,33 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
             <Button onClick={closeImmediately}>{t('shared:statuses.done')}</Button>
           </div>
         ) : (
-          <form className="bitfun-feedback__form" onSubmit={handleSubmit}>
+          <div ref={containerRef} className="bitfun-feedback__center">
+            <div className="bitfun-feedback__view-switch" role="tablist">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === 'create'}
+                className={activeView === 'create' ? 'is-active' : ''}
+                disabled={submitting}
+                onClick={() => changeView('create')}
+              >
+                <SquarePen size={15} aria-hidden="true" />
+                {t('feedback.views.create')}
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeView === 'inbox'}
+                className={activeView === 'inbox' ? 'is-active' : ''}
+                disabled={submitting}
+                onClick={() => changeView('inbox')}
+              >
+                <List size={15} aria-hidden="true" />
+                {t('feedback.views.inbox')}
+              </button>
+            </div>
+            {activeView === 'create' ? (
+              <form className="bitfun-feedback__form" onSubmit={handleSubmit}>
             <div className="bitfun-feedback__field">
               <label>{t('feedback.category')}<span aria-hidden="true">*</span></label>
               <Select
@@ -311,7 +368,15 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
                   : t('feedback.actions.submit')}
               </Button>
             </div>
-          </form>
+              </form>
+            ) : (
+              <FeedbackInboxView
+                wide={wideLayout}
+                selectedId={selectedFeedbackId}
+                onSelect={setSelectedFeedbackId}
+              />
+            )}
+          </div>
         )}
       </Modal>
       <ConfirmDialog

@@ -41,6 +41,44 @@ pub struct SubmitFeedbackResponse {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ListFeedbackRecordsRequest {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    pub page_size: u16,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackRecordSummary {
+    pub feedback_id: String,
+    pub category: FeedbackCategory,
+    pub status: FeedbackStatus,
+    pub has_new_reply: bool,
+    pub created_at: String,
+    pub updated_at: String,
+    pub can_open: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackInboxPage {
+    pub items: Vec<FeedbackRecordSummary>,
+    #[serde(default)]
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackAccessState {
+    pub has_history: bool,
+    pub can_reuse_access: bool,
+    #[serde(default)]
+    pub cached_inbox: FeedbackInboxPage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FeedbackError {
     pub code: String,
     pub message: String,
@@ -84,9 +122,19 @@ pub fn validate_content(content: &str) -> Result<(), FeedbackError> {
     Ok(())
 }
 
+pub fn validate_inbox_page_size(page_size: u16) -> Result<(), FeedbackError> {
+    if !(1..=100).contains(&page_size) {
+        return Err(FeedbackError::validation(
+            "PAGE_SIZE_INVALID",
+            "Inbox page size must be between 1 and 100",
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{validate_content, FEEDBACK_CONTENT_MAX_CHARS};
+    use super::{validate_content, validate_inbox_page_size, FEEDBACK_CONTENT_MAX_CHARS};
 
     #[test]
     fn validates_feedback_content_by_unicode_scalar_count() {
@@ -97,6 +145,19 @@ mod tests {
                 .unwrap_err()
                 .code,
             "CONTENT_TOO_LONG"
+        );
+    }
+
+    #[test]
+    fn validates_inbox_page_size() {
+        assert!(validate_inbox_page_size(20).is_ok());
+        assert_eq!(
+            validate_inbox_page_size(0).unwrap_err().code,
+            "PAGE_SIZE_INVALID"
+        );
+        assert_eq!(
+            validate_inbox_page_size(101).unwrap_err().code,
+            "PAGE_SIZE_INVALID"
         );
     }
 }

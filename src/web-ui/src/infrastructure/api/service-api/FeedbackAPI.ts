@@ -18,6 +18,33 @@ export interface SubmitFeedbackResult {
   inboxCursor: string;
 }
 
+export interface FeedbackRecordSummary {
+  feedbackId: string;
+  category: FeedbackCategory;
+  status: FeedbackStatus;
+  hasNewReply: boolean;
+  createdAt: string;
+  updatedAt: string;
+  canOpen: boolean;
+}
+
+export interface FeedbackInboxPage {
+  items: FeedbackRecordSummary[];
+  nextCursor?: string;
+  hasMore: boolean;
+}
+
+export interface FeedbackAccessState {
+  hasHistory: boolean;
+  canReuseAccess: boolean;
+  cachedInbox: FeedbackInboxPage;
+}
+
+export interface ListFeedbackRecordsInput {
+  cursor?: string;
+  pageSize?: number;
+}
+
 interface FeedbackCommandErrorShape {
   code?: string;
   message?: string;
@@ -47,6 +74,21 @@ export class FeedbackAPI {
   async submitFeedback(input: SubmitFeedbackInput): Promise<SubmitFeedbackResult> {
     const submit = await this.prepareSubmission(input);
     return submit();
+  }
+
+  async getAccessState(): Promise<FeedbackAccessState> {
+    return this.invoke<FeedbackAccessState>('feedback_get_access_state', {});
+  }
+
+  async listFeedbackRecords(
+    input: ListFeedbackRecordsInput,
+    options: { userInitiated: boolean },
+  ): Promise<FeedbackInboxPage> {
+    return this.invoke<FeedbackInboxPage>('list_feedback', {
+      cursor: input.cursor,
+      pageSize: input.pageSize ?? 20,
+      userInitiated: options.userInitiated,
+    });
   }
 
   async prepareSubmission(

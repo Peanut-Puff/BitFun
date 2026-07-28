@@ -91,6 +91,10 @@
     "cancel": "取消"
   },
   "feedback": {
+    "views": {
+      "create": "提交反饋",
+      "inbox": "反饋記錄"
+    },
     "category": "反饋分類",
     "categoryPlaceholder": "請選擇分類",
     "content": "反饋內容",
@@ -118,6 +122,32 @@
     "complete": {
       "title": "反饋已提交",
       "description": "反饋存取憑證已安全儲存。"
+    },
+    "inbox": {
+      "title": "反饋記錄",
+      "count": "{{count}} 條記錄",
+      "refresh": "重新整理",
+      "loading": "正在載入反饋記錄…",
+      "emptyTitle": "暫無反饋記錄",
+      "emptyDescription": "提交後的反饋會顯示在這裡。",
+      "loadMore": "載入更多",
+      "updated": "更新於 {{time}}",
+      "newReply": "有新回覆",
+      "entryUnread": "反饋，有新回覆",
+      "selectRecord": "請選擇一條反饋記錄",
+      "detailTitle": "反饋詳情",
+      "back": "返回反饋記錄",
+      "reference": "反饋編號",
+      "inaccessibleTitle": "目前會話無法存取",
+      "inaccessibleDescription": "本機儲存的存取憑證缺失或已失效。",
+      "accessUnavailable": "反饋存取狀態無法使用，已保留現有摘要。",
+      "refreshFailed": "重新整理反饋記錄失敗，已保留現有記錄。",
+      "status": {
+        "submitted": "已提交",
+        "inProgress": "處理中",
+        "waitingUser": "等待使用者",
+        "resolved": "已解決"
+      }
     },
     "exit": {
       "title": "反饋仍在提交",

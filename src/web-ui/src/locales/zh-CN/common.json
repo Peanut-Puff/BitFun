@@ -91,6 +91,10 @@
     "cancel": "取消"
   },
   "feedback": {
+    "views": {
+      "create": "提交反馈",
+      "inbox": "反馈记录"
+    },
     "category": "反馈分类",
     "categoryPlaceholder": "请选择分类",
     "content": "反馈内容",
@@ -118,6 +122,32 @@
     "complete": {
       "title": "反馈已提交",
       "description": "反馈访问凭据已安全保存。"
+    },
+    "inbox": {
+      "title": "反馈记录",
+      "count": "{{count}} 条记录",
+      "refresh": "刷新",
+      "loading": "正在加载反馈记录…",
+      "emptyTitle": "暂无反馈记录",
+      "emptyDescription": "提交后的反馈会显示在这里。",
+      "loadMore": "加载更多",
+      "updated": "更新于 {{time}}",
+      "newReply": "有新回复",
+      "entryUnread": "反馈，有新回复",
+      "selectRecord": "请选择一条反馈记录",
+      "detailTitle": "反馈详情",
+      "back": "返回反馈记录",
+      "reference": "反馈编号",
+      "inaccessibleTitle": "当前会话不可访问",
+      "inaccessibleDescription": "本机保存的访问凭据缺失或已失效。",
+      "accessUnavailable": "反馈访问状态不可用，已保留现有摘要。",
+      "refreshFailed": "刷新反馈记录失败，已保留现有记录。",
+      "status": {
+        "submitted": "已提交",
+        "inProgress": "处理中",
+        "waitingUser": "等待用户",
+        "resolved": "已解决"
+      }
     },
     "exit": {
       "title": "反馈仍在提交",

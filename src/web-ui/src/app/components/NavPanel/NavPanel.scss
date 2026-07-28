@@ -1777,6 +1777,15 @@ $_section-header-height: 24px;
   }
 }
 
+.bitfun-nav-panel__footer-menu-unread {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--color-error);
+  box-shadow: 0 0 0 2px var(--color-bg-elevated);
+}
+
 .bitfun-nav-panel__remote-disclaimer {
   display: flex;
   flex-direction: column;

@@ -958,6 +958,8 @@ pub async fn _run() {
             api::privacy_api::privacy_enter_not_accepted,
             api::privacy_api::privacy_mark_viewed,
             api::privacy_api::privacy_apply_collection_policy,
+            api::feedback_api::feedback_get_access_state,
+            api::feedback_api::list_feedback,
             api::feedback_api::submit_feedback,
             api::agentic_api::create_session,
             api::agentic_api::update_session_model,

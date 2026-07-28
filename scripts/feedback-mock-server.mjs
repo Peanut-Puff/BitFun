@@ -18,7 +18,10 @@ const server = http.createServer(async (request, response) => {
   if (request.method === 'POST' && url.pathname === '/__mock/control') {
     const body = await readJson(request);
     nextFault = typeof body.fault === 'string' ? body.fault : null;
-    return send(response, 200, { next_fault: nextFault }, requestId);
+    if (Number.isInteger(body.seed_inbox) && body.seed_inbox > 0) {
+      seedInbox(Math.min(body.seed_inbox, 120));
+    }
+    return send(response, 200, { next_fault: nextFault, records: records.size }, requestId);
   }
 
   const fault = takeFault();
@@ -30,6 +33,7 @@ const server = http.createServer(async (request, response) => {
   if (fault === '429') return sendError(response, 429, 'RATE_LIMITED', requestId, { 'Retry-After': '30' });
   if (fault === '5xx') return sendError(response, 503, 'INTERNAL_ERROR', requestId);
   if (fault === '401') return sendError(response, 401, 'ACCESS_TOKEN_INVALID', requestId);
+  if (fault === 'cursor_invalid') return sendError(response, 400, 'CURSOR_INVALID', requestId);
 
   if (request.method === 'POST' && url.pathname === '/auth/v1/anonymous/enroll') {
     const body = await readJson(request);
@@ -82,6 +86,7 @@ const server = http.createServer(async (request, response) => {
       return sendError(response, 400, 'CONTENT_TOO_LONG', requestId);
     }
     const feedbackId = randomUUID();
+    const createdAt = new Date().toISOString();
     const result = {
       feedback_id: feedbackId,
       capability_token: randomUUID(),
@@ -91,8 +96,38 @@ const server = http.createServer(async (request, response) => {
     };
     if (fault === 'capability_missing') delete result.capability_token;
     createRequests.set(idempotencyKey, { fingerprint, result });
-    records.set(feedbackId, { ...body, ...result });
+    records.set(feedbackId, {
+      ...body,
+      ...result,
+      has_new_reply: false,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
     return send(response, 201, result, requestId, { 'Idempotency-Replayed': 'false' });
+  }
+
+  if (request.method === 'GET' && url.pathname === '/support/v1/feedback/inbox') {
+    if (!validBearer(request)) return sendError(response, 401, 'ACCESS_TOKEN_INVALID', requestId);
+    const limit = parseLimit(url.searchParams.get('limit'), 20, 100);
+    if (limit === null) return sendError(response, 400, 'PAGE_SIZE_INVALID', requestId);
+    const offset = decodeCursor(url.searchParams.get('cursor'));
+    if (offset === null) return sendError(response, 400, 'CURSOR_INVALID', requestId);
+    const ordered = [...records.values()].sort((left, right) =>
+      right.created_at.localeCompare(left.created_at) || right.feedback_id.localeCompare(left.feedback_id));
+    const page = ordered.slice(offset, offset + limit);
+    const nextOffset = offset + page.length;
+    return send(response, 200, {
+      items: page.map(record => ({
+        feedback_id: record.feedback_id,
+        category: record.category,
+        status: record.status,
+        has_new_reply: record.has_new_reply,
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+      })),
+      cursor: encodeCursor(nextOffset),
+      has_more: nextOffset < ordered.length,
+    }, requestId);
   }
 
   return sendError(response, 404, 'NOT_FOUND', requestId);
@@ -112,6 +147,42 @@ function tokenPair(anonymousId) {
     scope: 'feedback:write,feedback:read',
     schema_version: '1.0.0',
   };
+}
+
+function seedInbox(count) {
+  for (let index = 0; index < count; index += 1) {
+    const feedbackId = randomUUID();
+    const createdAt = new Date(Date.now() - index * 60_000).toISOString();
+    records.set(feedbackId, {
+      feedback_id: feedbackId,
+      category: ['runtime_error', 'feature_request', 'usage_question', 'other'][index % 4],
+      status: ['submitted', 'in_progress', 'waiting_user', 'resolved'][index % 4],
+      has_new_reply: index % 3 === 0,
+      created_at: createdAt,
+      updated_at: createdAt,
+    });
+  }
+}
+
+function parseLimit(value, fallback, maximum) {
+  if (value === null) return fallback;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= maximum ? parsed : null;
+}
+
+function encodeCursor(offset) {
+  return Buffer.from(`inbox:${offset}`, 'utf8').toString('base64url');
+}
+
+function decodeCursor(cursor) {
+  if (cursor === null) return 0;
+  try {
+    const decoded = Buffer.from(cursor, 'base64url').toString('utf8');
+    const match = /^inbox:(\d+)$/.exec(decoded);
+    return match ? Number.parseInt(match[1], 10) : null;
+  } catch {
+    return null;
+  }
 }
 
 function takeFault() {

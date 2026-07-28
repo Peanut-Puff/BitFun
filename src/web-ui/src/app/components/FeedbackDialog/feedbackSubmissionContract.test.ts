@@ -44,11 +44,21 @@ describe('OpenHarmony feedback submission contract', () => {
     const dialog = readSource('./FeedbackDialog.tsx');
     const completeView = dialog.slice(
       dialog.indexOf('className="bitfun-feedback__complete"'),
-      dialog.indexOf(') : (\n          <form'),
+      dialog.indexOf(') : (\n          <div ref={containerRef}'),
     );
 
     expect(completeView).toContain("t('shared:statuses.done')");
     expect(completeView).not.toContain('openGitCode');
     expect(completeView).not.toContain('feedback-submit');
+  });
+
+  it('uses the feedback container width for the 840px layout threshold', () => {
+    const dialog = readSource('./FeedbackDialog.tsx');
+    const styles = readSource('./FeedbackDialog.scss');
+
+    expect(dialog).toContain('new ResizeObserver');
+    expect(dialog).toContain('setWideLayout(width >= 840)');
+    expect(styles).toContain('&.is-wide');
+    expect(styles).toContain('grid-template-columns: minmax(300px, 36%) minmax(0, 1fr)');
   });
 });

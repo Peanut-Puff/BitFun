@@ -26,6 +26,8 @@ import { useCurrentWorkspace } from '@/infrastructure/contexts/WorkspaceContext'
 import { useNotification } from '@/shared/notification-system';
 import { remoteConnectAPI } from '@/infrastructure/api/service-api/RemoteConnectAPI';
 import NotificationButton from '../../TitleBar/NotificationButton';
+import { usePrivacy } from '../../Privacy/PrivacyContext';
+import { useFeedbackInboxStore } from '../../FeedbackDialog/feedbackInboxStore';
 import {
   RemoteConnectDisclaimerContent,
 } from '../../RemoteConnectDialog/RemoteConnectDisclaimer';
@@ -58,6 +60,11 @@ const PersistentFooterActions: React.FC = () => {
   const { enableToolbarMode } = useToolbarModeContext();
   const { hasWorkspace } = useCurrentWorkspace();
   const { warning } = useNotification();
+  const { status: privacyStatus } = usePrivacy();
+  const initializeFeedbackForMode = useFeedbackInboxStore(state => state.initializeForMode);
+  const hasUnreadFeedback = useFeedbackInboxStore(state =>
+    state.records.some(record => record.hasNewReply),
+  );
 
   useEffect(() => {
     const onAutoExit = (event: Event) => {
@@ -80,7 +87,25 @@ const PersistentFooterActions: React.FC = () => {
   const [showAccountLogin, setShowAccountLogin] = useState(false);
   const [showRemoteConnect, setShowRemoteConnect] = useState(false);
   const [showRemoteDisclaimer, setShowRemoteDisclaimer] = useState(false);
+  const [feedbackPlatformEnabled, setFeedbackPlatformEnabled] = useState<boolean | null>(null);
   const [hasAgreedRemoteDisclaimer, setHasAgreedRemoteDisclaimer] = useState<boolean>(() => getRemoteConnectDisclaimerAgreed());
+
+  useEffect(() => {
+    let active = true;
+    void systemAPI.getSystemInfo().then(info => {
+      if (active) setFeedbackPlatformEnabled(info.platform === 'openharmony');
+    }).catch(() => {
+      if (active) setFeedbackPlatformEnabled(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!feedbackPlatformEnabled || !privacyStatus) return;
+    void initializeFeedbackForMode(privacyStatus.effectiveMode);
+  }, [feedbackPlatformEnabled, initializeFeedbackForMode, privacyStatus]);
 
   // Periodic token-expiry check. Only auto-open the login dialog if the
   // token has actually expired while the app is running — not on startup.
@@ -153,9 +178,14 @@ const PersistentFooterActions: React.FC = () => {
 
   const handleFeedback = useCallback(async () => {
     closeMenu();
+    if (feedbackPlatformEnabled) {
+      setShowFeedback(true);
+      return;
+    }
     try {
       const systemInfo = await systemAPI.getSystemInfo();
       if (systemInfo.platform === 'openharmony') {
+        setFeedbackPlatformEnabled(true);
         setShowFeedback(true);
         return;
       }
@@ -163,7 +193,7 @@ const PersistentFooterActions: React.FC = () => {
       // Web and older desktop hosts retain the external feedback behavior.
     }
     await systemAPI.openExternal('https://gitcode.com/OpenHarmonyPCDeveloper/BitFun/issues');
-  }, [closeMenu]);
+  }, [closeMenu, feedbackPlatformEnabled]);
 
   const handleFloatingMode = () => {
     closeMenu();
@@ -303,9 +333,15 @@ const PersistentFooterActions: React.FC = () => {
                     className="bitfun-nav-panel__footer-menu-item"
                     role="menuitem"
                     onClick={handleFeedback}
+                    aria-label={hasUnreadFeedback
+                      ? t('feedback.inbox.entryUnread')
+                      : t('header.feedback')}
                   >
                     <MessageCircle size={14} />
                     <span>{t('header.feedback')}</span>
+                    {hasUnreadFeedback ? (
+                      <span className="bitfun-nav-panel__footer-menu-unread" aria-hidden="true" />
+                    ) : null}
                   </button>
                   <button
                     type="button"

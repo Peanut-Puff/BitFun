@@ -91,6 +91,10 @@
     "cancel": "Cancel"
   },
   "feedback": {
+    "views": {
+      "create": "Submit feedback",
+      "inbox": "Feedback records"
+    },
     "category": "Category",
     "categoryPlaceholder": "Select a category",
     "content": "Feedback",
@@ -118,6 +122,32 @@
     "complete": {
       "title": "Feedback submitted",
       "description": "The feedback access credential was saved securely."
+    },
+    "inbox": {
+      "title": "Feedback records",
+      "count": "{{count}} records",
+      "refresh": "Refresh",
+      "loading": "Loading feedback records...",
+      "emptyTitle": "No feedback records",
+      "emptyDescription": "Submitted feedback will appear here.",
+      "loadMore": "Load more",
+      "updated": "Updated {{time}}",
+      "newReply": "New reply",
+      "entryUnread": "Feedback, new reply available",
+      "selectRecord": "Select a feedback record",
+      "detailTitle": "Feedback details",
+      "back": "Back to feedback records",
+      "reference": "Feedback reference",
+      "inaccessibleTitle": "This conversation is unavailable",
+      "inaccessibleDescription": "Its saved access credential is missing or no longer valid.",
+      "accessUnavailable": "Saved feedback access is unavailable. Existing summaries are retained.",
+      "refreshFailed": "Feedback records could not be refreshed. Existing records are retained.",
+      "status": {
+        "submitted": "Submitted",
+        "inProgress": "In progress",
+        "waitingUser": "Waiting for you",
+        "resolved": "Resolved"
+      }
     },
     "exit": {
       "title": "Feedback is still submitting",

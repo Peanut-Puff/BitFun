@@ -1,6 +1,8 @@
 use super::vault::{FeedbackCredentialStore, FileFeedbackCredentialStore};
 use bitfun_product_domains::feedback::{
-    validate_content, FeedbackError, FeedbackStatus, SubmitFeedbackRequest, SubmitFeedbackResponse,
+    validate_content, validate_inbox_page_size, FeedbackAccessState, FeedbackError,
+    FeedbackInboxPage, FeedbackRecordSummary, FeedbackStatus, ListFeedbackRecordsRequest,
+    SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::{Response, StatusCode};
@@ -34,6 +36,12 @@ struct StoredCredentials {
     pending_create_fingerprint: Option<String>,
     #[serde(default)]
     pending_create_idempotency_key: Option<String>,
+    #[serde(default)]
+    inbox_items: Vec<FeedbackRecordSummary>,
+    #[serde(default)]
+    inbox_next_cursor: Option<String>,
+    #[serde(default)]
+    inbox_has_more: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -77,6 +85,23 @@ struct CreateRequestBody<'a> {
     session_id_hash: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_version: Option<&'a str>,
+}
+
+#[derive(Debug, Deserialize)]
+struct InboxResponse {
+    items: Vec<InboxItem>,
+    cursor: String,
+    has_more: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct InboxItem {
+    feedback_id: String,
+    category: bitfun_product_domains::feedback::FeedbackCategory,
+    status: FeedbackStatus,
+    has_new_reply: bool,
+    created_at: String,
+    updated_at: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -190,6 +215,91 @@ impl FeedbackService {
         })
     }
 
+    pub async fn access_state(&self) -> Result<FeedbackAccessState, FeedbackError> {
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        let can_reuse_access =
+            state.stored.anonymous_id.is_some() && state.stored.refresh_token.is_some();
+        let has_history =
+            !state.stored.capabilities.is_empty() || !state.stored.inbox_items.is_empty();
+        Ok(FeedbackAccessState {
+            has_history,
+            can_reuse_access,
+            cached_inbox: cached_inbox(&state.stored, can_reuse_access),
+        })
+    }
+
+    pub async fn list_feedback(
+        &self,
+        request: ListFeedbackRecordsRequest,
+    ) -> Result<FeedbackInboxPage, FeedbackError> {
+        validate_inbox_page_size(request.page_size)?;
+        let cursor = request.cursor.clone();
+        let page_size = request.page_size.to_string();
+        let response = self
+            .send_authenticated_existing("feedback:read", |token| {
+                let mut request = self
+                    .client
+                    .get(self.url("/support/v1/feedback/inbox")?)
+                    .bearer_auth(token)
+                    .header("X-Request-ID", Uuid::new_v4().to_string())
+                    .query(&[("limit", &page_size)]);
+                if let Some(cursor) = cursor.as_deref() {
+                    request = request.query(&[("cursor", cursor)]);
+                }
+                request.build().map_err(network_error)
+            })
+            .await?;
+        let received: InboxResponse = decode_success(response, StatusCode::OK).await?;
+
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        let can_reuse_access =
+            state.stored.anonymous_id.is_some() && state.stored.refresh_token.is_some();
+        let items = received
+            .items
+            .into_iter()
+            .map(|item| FeedbackRecordSummary {
+                can_open: can_reuse_access
+                    && state.stored.capabilities.contains_key(&item.feedback_id),
+                feedback_id: item.feedback_id,
+                category: item.category,
+                status: item.status,
+                has_new_reply: item.has_new_reply,
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+            })
+            .collect::<Vec<_>>();
+        let next_cursor = (!received.cursor.is_empty()).then_some(received.cursor);
+
+        let mut next = state.stored.clone();
+        if request.cursor.is_none() {
+            next.inbox_items = items.clone();
+        } else {
+            for item in &items {
+                if let Some(existing) = next
+                    .inbox_items
+                    .iter_mut()
+                    .find(|existing| existing.feedback_id == item.feedback_id)
+                {
+                    *existing = item.clone();
+                } else {
+                    next.inbox_items.push(item.clone());
+                }
+            }
+        }
+        next.inbox_next_cursor = next_cursor.clone();
+        next.inbox_has_more = received.has_more;
+        self.persist(&next).await?;
+        state.stored = next;
+
+        Ok(FeedbackInboxPage {
+            items,
+            next_cursor,
+            has_more: received.has_more,
+        })
+    }
+
     fn url(&self, path: &str) -> Result<String, FeedbackError> {
         self.base_url
             .as_ref()
@@ -248,6 +358,85 @@ impl FeedbackService {
             .execute(build_request(&token)?)
             .await
             .map_err(network_error)
+    }
+
+    async fn send_authenticated_existing<F>(
+        &self,
+        scope: &str,
+        build_request: F,
+    ) -> Result<Response, FeedbackError>
+    where
+        F: Fn(&str) -> Result<reqwest::Request, FeedbackError>,
+    {
+        let token = self.existing_access_token(scope, false).await?;
+        let response = self
+            .client
+            .execute(build_request(&token)?)
+            .await
+            .map_err(network_error)?;
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(response);
+        }
+
+        let token = self.existing_access_token(scope, true).await?;
+        self.client
+            .execute(build_request(&token)?)
+            .await
+            .map_err(network_error)
+    }
+
+    async fn existing_access_token(
+        &self,
+        scope: &str,
+        force_refresh: bool,
+    ) -> Result<String, FeedbackError> {
+        let mut state = self.state.lock().await;
+        self.ensure_existing_loaded(&mut state).await?;
+        if !force_refresh {
+            if let Some(token) = state.access_token.as_ref() {
+                if token.expires_at
+                    > Utc::now() + ChronoDuration::seconds(ACCESS_TOKEN_REFRESH_MARGIN_SECONDS)
+                    && token.scopes.iter().any(|item| item == scope)
+                {
+                    return Ok(token.value.clone());
+                }
+            }
+        }
+        if state.stored.refresh_token.is_none() || state.stored.anonymous_id.is_none() {
+            return Err(FeedbackError::new(
+                "FEEDBACK_ACCESS_UNAVAILABLE",
+                "Saved feedback access is unavailable",
+                false,
+            ));
+        }
+        let token = match self.refresh(&mut state).await {
+            Ok(token) => token,
+            Err(error) if refresh_requires_enroll(&error.code) => {
+                let mut next = state.stored.clone();
+                next.anonymous_id = None;
+                next.refresh_token = None;
+                next.refresh_idempotency_key = None;
+                self.persist(&next).await?;
+                state.stored = next;
+                state.access_token = None;
+                return Err(FeedbackError::new(
+                    "FEEDBACK_ACCESS_EXPIRED",
+                    "Saved feedback access has expired",
+                    false,
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        if !token.scopes.iter().any(|item| item == scope) {
+            return Err(FeedbackError::new(
+                "SCOPE_INSUFFICIENT",
+                "The feedback token does not include the required scope",
+                false,
+            ));
+        }
+        let value = token.value.clone();
+        state.access_token = Some(token);
+        Ok(value)
     }
 
     async fn access_token(
@@ -380,6 +569,15 @@ impl FeedbackService {
     }
 
     async fn ensure_loaded(&self, state: &mut RuntimeState) -> Result<(), FeedbackError> {
+        self.ensure_existing_loaded(state).await?;
+        if state.stored.enroll_key.is_empty() {
+            state.stored.enroll_key = Uuid::new_v4().to_string();
+            self.persist(&state.stored).await?;
+        }
+        Ok(())
+    }
+
+    async fn ensure_existing_loaded(&self, state: &mut RuntimeState) -> Result<(), FeedbackError> {
         if state.loaded {
             return Ok(());
         }
@@ -396,19 +594,8 @@ impl FeedbackService {
                     "Saved feedback access data is invalid",
                 )
             })?,
-            None => {
-                let created = StoredCredentials {
-                    enroll_key: Uuid::new_v4().to_string(),
-                    ..StoredCredentials::default()
-                };
-                self.persist(&created).await?;
-                created
-            }
+            None => StoredCredentials::default(),
         };
-        if state.stored.enroll_key.is_empty() {
-            state.stored.enroll_key = Uuid::new_v4().to_string();
-            self.persist(&state.stored).await?;
-        }
         state.loaded = true;
         Ok(())
     }
@@ -426,6 +613,23 @@ impl FeedbackService {
                 "Feedback access could not be saved securely",
             )
         })
+    }
+}
+
+fn cached_inbox(stored: &StoredCredentials, can_reuse_access: bool) -> FeedbackInboxPage {
+    FeedbackInboxPage {
+        items: stored
+            .inbox_items
+            .iter()
+            .cloned()
+            .map(|mut item| {
+                item.can_open =
+                    can_reuse_access && stored.capabilities.contains_key(&item.feedback_id);
+                item
+            })
+            .collect(),
+        next_cursor: stored.inbox_next_cursor.clone(),
+        has_more: stored.inbox_has_more,
     }
 }
 
@@ -561,11 +765,14 @@ fn credential_error(code: &str, message: &str) -> FeedbackError {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_request, parse_scopes, FeedbackService};
+    use super::{normalize_request, parse_scopes, FeedbackService, StoredCredentials};
     use crate::feedback::FeedbackCredentialStore;
     use anyhow::{anyhow, Result};
     use async_trait::async_trait;
-    use bitfun_product_domains::feedback::{FeedbackCategory, SubmitFeedbackRequest};
+    use bitfun_product_domains::feedback::{
+        FeedbackCategory, ListFeedbackRecordsRequest, SubmitFeedbackRequest,
+    };
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex as StdMutex};
     use std::time::Duration;
@@ -611,6 +818,72 @@ mod tests {
         });
         assert_eq!(normalized.trace_id, None);
         assert_eq!(normalized.session_id_hash, None);
+    }
+
+    #[tokio::test]
+    async fn access_state_does_not_create_an_identity() {
+        let store = Arc::new(MemoryStore::default());
+        let service = FeedbackService::new(
+            None,
+            "1.0.0".to_string(),
+            store.clone(),
+            Duration::from_secs(2),
+        );
+
+        let state = service.access_state().await.unwrap();
+
+        assert!(!state.has_history);
+        assert!(!state.can_reuse_access);
+        assert_eq!(store.stores.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn lists_inbox_with_backend_cursor_mapping_and_cached_accessibility() {
+        let responses = vec![
+            json_response(
+                200,
+                r#"{"anonymous_id":"anon","access_token":"fresh","refresh_token":"refresh-2","expires_in":3600,"refresh_expires_in":2592000,"scope":"feedback:write,feedback:read","schema_version":"1"}"#,
+            ),
+            json_response(
+                200,
+                r#"{"items":[{"feedback_id":"feedback-1","category":"other","status":"waiting_user","has_new_reply":true,"created_at":"2026-07-28T01:00:00Z","updated_at":"2026-07-28T02:00:00Z"}],"cursor":"cursor-2","has_more":true}"#,
+            ),
+        ];
+        let (base_url, requests) = spawn_server(responses).await;
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            anonymous_id: Some("anon".to_string()),
+            refresh_token: Some("refresh-1".to_string()),
+            capabilities: HashMap::from([("feedback-1".to_string(), "capability".to_string())]),
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            ..MemoryStore::default()
+        });
+        let service = FeedbackService::new(
+            Some(base_url),
+            "1.0.0".to_string(),
+            store,
+            Duration::from_secs(2),
+        );
+
+        let page = service
+            .list_feedback(ListFeedbackRecordsRequest {
+                cursor: Some("cursor-1".to_string()),
+                page_size: 20,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page.next_cursor.as_deref(), Some("cursor-2"));
+        assert!(page.has_more);
+        assert!(page.items[0].can_open);
+        let captured = requests.lock().unwrap();
+        assert!(captured[1].starts_with("GET /support/v1/feedback/inbox?limit=20&cursor=cursor-1 "));
+        drop(captured);
+        let restored = service.access_state().await.unwrap();
+        assert!(restored.cached_inbox.items[0].has_new_reply);
     }
 
     #[tokio::test]

@@ -41,6 +41,28 @@ describe('FeedbackAPI', () => {
     expect(truncated.endsWith('😀')).toBe(true);
   });
 
+  it('maps Inbox paging to a structured request with a fixed default page size', async () => {
+    const { feedbackAPI } = await import('./FeedbackAPI');
+    invokeMock.mockResolvedValue({ items: [], hasMore: false });
+
+    await feedbackAPI.listFeedbackRecords(
+      { cursor: 'cursor-1' },
+      { userInitiated: true },
+    );
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      'list_feedback',
+      {
+        request: {
+          cursor: 'cursor-1',
+          pageSize: 20,
+          userInitiated: true,
+        },
+      },
+      { retries: 0 },
+    );
+  });
+
   it('normalizes command errors without requiring diagnostic text', async () => {
     const { normalizeFeedbackError } = await import('./FeedbackAPI');
     const caught = normalizeFeedbackError({

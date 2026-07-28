@@ -1,7 +1,9 @@
 use bitfun_product_domains::feedback::{
-    FeedbackError, SubmitFeedbackRequest, SubmitFeedbackResponse,
+    FeedbackAccessState, FeedbackError, FeedbackInboxPage, ListFeedbackRecordsRequest,
+    SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use bitfun_services_integrations::feedback::FeedbackService;
+use serde::Deserialize;
 use tauri::State;
 
 use crate::api::privacy_api::PrivacyServiceState;
@@ -30,6 +32,51 @@ impl FeedbackServiceState {
             )
         })
     }
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FeedbackAccessStateRequest {}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListFeedbackCommandRequest {
+    #[serde(default)]
+    pub cursor: Option<String>,
+    pub page_size: u16,
+    #[serde(default)]
+    pub user_initiated: bool,
+}
+
+#[tauri::command]
+pub async fn feedback_get_access_state(
+    feedback_state: State<'_, FeedbackServiceState>,
+    request: FeedbackAccessStateRequest,
+) -> Result<FeedbackAccessState, FeedbackError> {
+    let _ = request;
+    feedback_state.service()?.access_state().await
+}
+
+#[tauri::command]
+pub async fn list_feedback(
+    feedback_state: State<'_, FeedbackServiceState>,
+    privacy_state: State<'_, PrivacyServiceState>,
+    request: ListFeedbackCommandRequest,
+) -> Result<FeedbackInboxPage, FeedbackError> {
+    if !privacy_state.collection_allowed() && !request.user_initiated {
+        return Err(FeedbackError::new(
+            "PRIVACY_BACKGROUND_REQUEST_BLOCKED",
+            "Background feedback requests require full privacy mode",
+            false,
+        ));
+    }
+    feedback_state
+        .service()?
+        .list_feedback(ListFeedbackRecordsRequest {
+            cursor: request.cursor,
+            page_size: request.page_size,
+        })
+        .await
 }
 
 #[tauri::command]
