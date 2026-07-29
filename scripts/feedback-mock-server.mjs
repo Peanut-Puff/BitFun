@@ -10,8 +10,9 @@ const records = new Map();
 let nextFault = null;
 
 const server = http.createServer(async (request, response) => {
-  const requestId = header(request, 'x-request-id') ?? randomUUID();
+  const requestId = normalizeRequestId(header(request, 'x-request-id'));
   const url = new URL(request.url ?? '/', `http://${request.headers.host ?? 'localhost'}`);
+  logRequestStage(requestStage(request.method, url.pathname), requestId);
 
   if (request.method === 'GET' && url.pathname === '/health') {
     return send(response, 200, { status: 'ok' }, requestId);
@@ -361,6 +362,32 @@ function requireUuidHeader(request, response, requestId) {
 function header(request, name) {
   const value = request.headers[name];
   return Array.isArray(value) ? value[0] : value;
+}
+
+function normalizeRequestId(value) {
+  return typeof value === 'string' && /^[a-zA-Z0-9._:-]{1,128}$/.test(value)
+    ? value
+    : randomUUID();
+}
+
+function requestStage(method, pathname) {
+  if (method === 'GET' && pathname === '/health') return 'health';
+  if (method === 'POST' && pathname === '/__mock/control') return 'control';
+  if (method === 'POST' && pathname === '/auth/v1/anonymous/enroll') return 'enroll';
+  if (method === 'POST' && pathname === '/auth/v1/anonymous/token') return 'refresh';
+  if (method === 'POST' && pathname === '/support/v1/feedback') return 'create';
+  if (method === 'GET' && pathname === '/support/v1/feedback/inbox') return 'inbox';
+  if (/^\/support\/v1\/feedback\/[^/]+\/messages$/.test(pathname)) {
+    return method === 'GET' ? 'message_history' : method === 'POST' ? 'reply' : 'unknown';
+  }
+  if (method === 'POST' && /^\/support\/v1\/feedback\/[^/]+\/ack$/.test(pathname)) {
+    return 'acknowledge';
+  }
+  return 'unknown';
+}
+
+function logRequestStage(stage, requestId) {
+  process.stdout.write(`${JSON.stringify({ stage, requestId })}\n`);
 }
 
 async function readJson(request) {
