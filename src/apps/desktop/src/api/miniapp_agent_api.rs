@@ -162,7 +162,6 @@ pub async fn miniapp_agent_run(
     scheduler: State<'_, Arc<DialogScheduler>>,
     request: MiniAppAgentRunRequest,
 ) -> Result<MiniAppAgentRunResponse, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     require_agent_prompt(&request.prompt)?;
     let agent_perms = require_agent_permission(&state, &request.app_id).await?;
     check_agent_rate_limit(

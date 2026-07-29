@@ -827,14 +827,8 @@ pub async fn _run() {
             );
 
             let step_started = Instant::now();
-            let privacy_state: tauri::State<'_, api::privacy_api::PrivacyServiceState> =
-                app.state();
             api::remote_connect_api::init_auto_sync();
-            if privacy_state.collection_allowed() {
-                api::remote_connect_api::init_on_startup();
-            } else {
-                log::info!("Remote connect startup is disabled by the privacy collection policy");
-            }
+            api::remote_connect_api::init_on_startup();
             startup_trace.record_elapsed_step(
                 "native_setup",
                 "remote_connect_init_on_startup",

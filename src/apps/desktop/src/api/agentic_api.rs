@@ -1002,7 +1002,6 @@ pub async fn start_dialog_turn(
     runtime: State<'_, DesktopRuntimeContext>,
     request: StartDialogTurnRequest,
 ) -> Result<StartDialogTurnResponse, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let runtime_request = desktop_dialog_turn_request(request)?;
 
     runtime
@@ -1102,7 +1101,6 @@ pub async fn compact_session(
     app_state: State<'_, AppState>,
     request: CompactSessionRequest,
 ) -> Result<StartDialogTurnResponse, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return Err("session_id is required".to_string());
@@ -1487,7 +1485,6 @@ pub async fn run_init_agents_md(
     app_state: State<'_, AppState>,
     request: RunInitAgentsMdRequest,
 ) -> Result<StartDialogTurnResponse, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let session_id = request.session_id.trim();
     if session_id.is_empty() {
         return Err("session_id is required".to_string());
@@ -2345,7 +2342,6 @@ pub async fn generate_session_title(
     coordinator: State<'_, Arc<ConversationCoordinator>>,
     request: GenerateSessionTitleRequest,
 ) -> Result<String, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     coordinator
         .generate_session_title(
             &request.session_id,

@@ -45,13 +45,33 @@ describe('OpenHarmony privacy lifecycle contract', () => {
     expect(`${api}\n${nativeApi}`).not.toContain('privacy_release_business_integrations');
   });
 
-  it('defaults OpenHarmony remote startup to the closed collection policy', () => {
+  it('scopes the collection policy to feedback instead of disabling product capabilities', () => {
     const desktop = readSource('../../../../../apps/desktop/src/lib.rs');
+    const privacyApi = readSource('../../../../../apps/desktop/src/api/privacy_api.rs');
+    const feedbackApi = readSource('../../../../../apps/desktop/src/api/feedback_api.rs');
     const privacy = readSource('../../../../../crates/services/services-integrations/src/privacy/mod.rs');
+    const capabilitySources = [
+      'agentic_api.rs',
+      'announcement_api.rs',
+      'btw_api.rs',
+      'commands.rs',
+      'editor_ai_api.rs',
+      'miniapp_agent_api.rs',
+      'remote_connect_api.rs',
+      'startchat_agent_api.rs',
+      'system_api.rs',
+    ].map(file => readSource(`../../../../../apps/desktop/src/api/${file}`));
 
     expect(desktop).toContain('PrivacyServiceState::enabled(');
-    expect(desktop).toContain('if privacy_state.collection_allowed()');
+    expect(desktop).toContain('remote_connect_api::init_on_startup();');
+    expect(desktop).not.toContain('if privacy_state.collection_allowed()');
     expect(privacy).toContain('PrivacyCollectionPolicy::new(false)');
+    expect(feedbackApi).toContain('!privacy_state.collection_allowed()');
+    expect(privacyApi).not.toContain('require_collection_allowed');
+    expect(privacyApi).not.toContain('suspend_for_privacy');
+    for (const source of capabilitySources) {
+      expect(source).not.toContain('require_collection_allowed');
+    }
   });
 
   it('requests calendar permission only when calendar is used and does not auto-update at startup', () => {

@@ -1211,7 +1211,6 @@ pub async fn test_ai_config_connection(
     state: State<'_, AppState>,
     request: TestAIConfigConnectionRequest,
 ) -> Result<bitfun_core::util::types::ConnectionTestResult, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let model_name = request.config.name.clone();
     let supports_image_input = request.config.capabilities.iter().any(|cap| {
         matches!(
@@ -1307,7 +1306,6 @@ pub async fn list_ai_models_by_config(
     state: State<'_, AppState>,
     request: ListAIModelsByConfigRequest,
 ) -> Result<Vec<bitfun_core::util::types::RemoteModelInfo>, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let config_name = request.config.name.clone();
     let ai_client = create_transient_ai_client_for_config(&state, request.config).await?;
 

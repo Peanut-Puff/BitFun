@@ -7,14 +7,12 @@ use bitfun_services_integrations::privacy::{PrivacyCollectionPolicy, PrivacyServ
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::State;
 use tokio::sync::Mutex;
 
 pub struct PrivacyServiceState {
     service: Option<Mutex<PrivacyService>>,
     collection_policy: Arc<PrivacyCollectionPolicy>,
-    full_mode_active: AtomicBool,
 }
 
 static COLLECTION_POLICY: OnceLock<Arc<PrivacyCollectionPolicy>> = OnceLock::new();
@@ -24,26 +22,11 @@ fn shared_collection_policy(initially_allowed: bool) -> Arc<PrivacyCollectionPol
         .clone()
 }
 
-pub fn require_collection_allowed() -> Result<(), String> {
-    #[cfg(target_env = "ohos")]
-    if !COLLECTION_POLICY
-        .get_or_init(|| Arc::new(PrivacyCollectionPolicy::new(false)))
-        .collection_allowed()
-    {
-        return Err(
-            "PRIVACY_CONSENT_REQUIRED: This network capability is disabled in the current privacy mode"
-                .to_string(),
-        );
-    }
-    Ok(())
-}
-
 impl PrivacyServiceState {
     pub fn enabled(storage_dir: PathBuf, locale: &str) -> Self {
         Self {
             service: Some(Mutex::new(PrivacyService::new(storage_dir, locale))),
             collection_policy: shared_collection_policy(false),
-            full_mode_active: AtomicBool::new(false),
         }
     }
 
@@ -51,7 +34,6 @@ impl PrivacyServiceState {
         Self {
             service: None,
             collection_policy: shared_collection_policy(true),
-            full_mode_active: AtomicBool::new(true),
         }
     }
 
@@ -59,16 +41,13 @@ impl PrivacyServiceState {
         self.collection_policy.collection_allowed()
     }
 
-    fn enter_full_mode(&self) -> Result<bool, PrivacyError> {
-        self.collection_policy.apply(PrivacyEffectiveMode::Full)?;
-        Ok(!self.full_mode_active.swap(true, Ordering::SeqCst))
+    fn enter_full_mode(&self) -> Result<(), PrivacyError> {
+        self.collection_policy.apply(PrivacyEffectiveMode::Full)
     }
 
     fn enter_not_accepted_mode(&self) -> Result<(), PrivacyError> {
         self.collection_policy
-            .apply(PrivacyEffectiveMode::PrivacyNotAccepted)?;
-        self.full_mode_active.store(false, Ordering::SeqCst);
-        Ok(())
+            .apply(PrivacyEffectiveMode::PrivacyNotAccepted)
     }
 
     async fn with_service<T>(
@@ -102,15 +81,13 @@ impl PrivacyServiceState {
         Ok(status)
     }
 
-    async fn initialize(&self, app_version: &str) -> Result<(PrivacyStatus, bool), PrivacyError> {
+    async fn initialize(&self, app_version: &str) -> Result<PrivacyStatus, PrivacyError> {
         let Some(service) = self.service.as_ref() else {
-            return Ok((PrivacyStatus::disabled(), false));
+            return Ok(PrivacyStatus::disabled());
         };
         let status = service.lock().await.initialize(app_version).await?;
-        let mut entered_full_mode = false;
         let application = if status.effective_mode == PrivacyEffectiveMode::Full {
             self.enter_full_mode()
-                .map(|entered| entered_full_mode = entered)
         } else {
             self.enter_not_accepted_mode()
         };
@@ -118,12 +95,9 @@ impl PrivacyServiceState {
             let mut failed_status = status;
             failed_status.effective_mode = PrivacyEffectiveMode::PrivacyNotAccepted;
             failed_status.configuration_error = Some(error.code);
-            return Ok((failed_status, false));
+            return Ok(failed_status);
         }
-        Ok((
-            self.status_with_effective_mode(status).await?,
-            entered_full_mode,
-        ))
+        self.status_with_effective_mode(status).await
     }
 }
 
@@ -133,13 +107,9 @@ pub async fn privacy_initialize(
     app: tauri::AppHandle,
     _request: InitializePrivacyRequest,
 ) -> Result<PrivacyStatus, PrivacyError> {
-    let (status, entered_full_mode) = state
+    state
         .initialize(&app.package_info().version.to_string())
-        .await?;
-    if entered_full_mode {
-        resume_collection_requests(app.clone());
-    }
-    Ok(status)
+        .await
 }
 
 #[tauri::command]
@@ -175,9 +145,7 @@ pub async fn privacy_accept(
             Box::pin(async move { service.accept(&request, &app_version).await })
         })
         .await?;
-    if state.enter_full_mode()? {
-        resume_collection_requests(app.clone());
-    }
+    state.enter_full_mode()?;
     state.status_with_effective_mode(status).await
 }
 
@@ -191,7 +159,6 @@ pub async fn privacy_enter_not_accepted(
         return Ok(PrivacyStatus::disabled());
     }
     state.enter_not_accepted_mode()?;
-    crate::api::remote_connect_api::suspend_for_privacy().await;
     let app_version = app.package_info().version.to_string();
     let status = state
         .with_service(|service| {
@@ -247,15 +214,10 @@ pub async fn privacy_apply_collection_policy(
             ));
         }
     }
-    let entered_full_mode = if request.mode == PrivacyEffectiveMode::Full {
-        state.enter_full_mode()?
+    if request.mode == PrivacyEffectiveMode::Full {
+        state.enter_full_mode()?;
     } else {
         state.enter_not_accepted_mode()?;
-        crate::api::remote_connect_api::suspend_for_privacy().await;
-        false
-    };
-    if entered_full_mode {
-        resume_collection_requests(app.clone());
     }
     let app_version = app.package_info().version.to_string();
     let status = state
@@ -264,13 +226,4 @@ pub async fn privacy_apply_collection_policy(
         })
         .await?;
     state.status_with_effective_mode(status).await
-}
-
-fn resume_collection_requests(app: tauri::AppHandle) {
-    #[cfg(target_env = "ohos")]
-    {
-        crate::api::remote_connect_api::init_on_startup();
-    }
-    #[cfg(not(target_env = "ohos"))]
-    let _ = app;
 }

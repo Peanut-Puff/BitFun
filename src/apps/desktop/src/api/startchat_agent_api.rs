@@ -46,7 +46,6 @@ pub async fn analyze_work_state(
     state: State<'_, AppState>,
     request: AnalyzeWorkStateRequest,
 ) -> Result<WorkStateAnalysis, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let agent = StartchatFunctionAgent::new(state.ai_client_factory.clone());
     let opts = request.options.unwrap_or_default();
 
@@ -67,7 +66,6 @@ pub async fn quick_analyze_work_state(
     state: State<'_, AppState>,
     request: QuickAnalyzeRequest,
 ) -> Result<WorkStateAnalysis, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let agent = StartchatFunctionAgent::new(state.ai_client_factory.clone());
     let language = request.language.unwrap_or(Language::Chinese);
 
@@ -88,7 +86,6 @@ pub async fn generate_greeting_only(
     state: State<'_, AppState>,
     request: GenerateGreetingRequest,
 ) -> Result<WorkStateAnalysis, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let agent = StartchatFunctionAgent::new(state.ai_client_factory.clone());
 
     agent
@@ -108,7 +105,6 @@ pub async fn get_work_state_summary(
     state: State<'_, AppState>,
     request: QuickAnalyzeRequest,
 ) -> Result<WorkStateSummaryResponse, String> {
-    crate::api::privacy_api::require_collection_allowed()?;
     let agent = StartchatFunctionAgent::new(state.ai_client_factory.clone());
 
     let language = request.language.unwrap_or(Language::Chinese);

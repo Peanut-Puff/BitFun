@@ -30,7 +30,7 @@ describe('OpenHarmony privacy policy management contract', () => {
     expect(withdraw.indexOf('state.enter_not_accepted_mode()?')).toBeLessThan(
       withdraw.indexOf('.enter_not_accepted('),
     );
-    expect(withdraw).toContain('suspend_for_privacy().await');
+    expect(withdraw).not.toContain('suspend_for_privacy');
     expect(dialog).toContain("operationError === 'withdraw'");
     expect(dialog).toContain("operationError === 'apply'");
     expect(gate).toContain('applyRetryRequired');

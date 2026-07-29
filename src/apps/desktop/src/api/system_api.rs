@@ -351,7 +351,6 @@ pub async fn open_external_ohos(url: String) -> Result<(), String> {
 pub async fn check_for_updates_ohos() -> Result<String, String> {
     #[cfg(target_env = "ohos")]
     {
-        crate::api::privacy_api::require_collection_allowed()?;
         use crate::api::ohos::update::check_app_update_ohos;
         check_app_update_ohos().await
     }
