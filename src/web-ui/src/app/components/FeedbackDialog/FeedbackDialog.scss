@@ -1,6 +1,11 @@
+.bitfun-feedback__overlay {
+  padding: 48px 40px 32px;
+}
+
 .bitfun-feedback__overlay .modal {
-  width: min(1040px, calc(100vw - 48px));
-  max-width: min(1040px, calc(100vw - 48px));
+  width: min(960px, calc(100vw - 80px));
+  max-width: min(960px, calc(100vw - 80px));
+  max-height: calc(100vh - 80px);
 }
 
 .bitfun-feedback__modal-content {
@@ -16,7 +21,7 @@
   width: 100%;
   min-width: 0;
   min-height: 0;
-  height: min(680px, calc(100vh - 84px));
+  height: min(620px, calc(100vh - 114px));
 }
 
 .bitfun-feedback__view-switch {
@@ -580,17 +585,17 @@
 
 @media (max-width: 680px), (max-height: 540px) {
   .bitfun-feedback__overlay {
-    padding: 12px;
+    padding: 44px 12px 12px;
   }
 
   .bitfun-feedback__overlay .modal {
     width: calc(100vw - 24px);
     max-width: calc(100vw - 24px);
-    max-height: calc(100vh - 24px);
+    max-height: calc(100vh - 56px);
   }
 
   .bitfun-feedback__center {
-    height: calc(100vh - 60px);
+    height: calc(100vh - 90px);
   }
 
   .bitfun-feedback__form {

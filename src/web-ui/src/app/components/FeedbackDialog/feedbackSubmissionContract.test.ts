@@ -62,6 +62,16 @@ describe('OpenHarmony feedback submission contract', () => {
     expect(styles).toContain('grid-template-columns: minmax(300px, 36%) minmax(0, 1fr)');
   });
 
+  it('keeps the dialog below the host window controls at every supported size', () => {
+    const styles = readSource('./FeedbackDialog.scss');
+
+    expect(styles).toContain('padding: 48px 40px 32px;');
+    expect(styles).toContain('width: min(960px, calc(100vw - 80px));');
+    expect(styles).toContain('height: min(620px, calc(100vh - 114px));');
+    expect(styles).toContain('padding: 44px 12px 12px;');
+    expect(styles).toContain('max-height: calc(100vh - 56px);');
+  });
+
   it('keeps Mock request logs limited to a fixed stage and request id', () => {
     const mock = readSource('../../../../../../scripts/feedback-mock-server.mjs');
 
