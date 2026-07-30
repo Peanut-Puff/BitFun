@@ -1,6 +1,6 @@
 use super::message_cache::{MessageCache, MessageCacheData};
+use super::state_cache::{FeedbackStateCache, FeedbackStateCacheData};
 use super::vault::{FeedbackCredentialStore, FileFeedbackCredentialStore};
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use bitfun_product_domains::feedback::{
     validate_content, validate_inbox_page_size, validate_message_page_size,
     AcknowledgeFeedbackRequest, AcknowledgeFeedbackResponse, FeedbackAccessState,
@@ -10,7 +10,6 @@ use bitfun_product_domains::feedback::{
     SubmitFeedbackRequest, SubmitFeedbackResponse,
 };
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
-use rand::RngCore;
 use reqwest::{Response, StatusCode};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -28,34 +27,80 @@ const DEBUG_FEEDBACK_API_BASE_URL: &str = "http://127.0.0.1:38971";
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct StoredCredentials {
     enroll_key: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     enroll_idempotency_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     refresh_idempotency_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     anonymous_id: Option<String>,
     #[serde(default)]
     refresh_token: Option<String>,
     #[serde(default)]
     capabilities: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pending_create_fingerprint: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pending_create_idempotency_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     inbox_items: Vec<FeedbackRecordSummary>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     inbox_next_cursor: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     inbox_has_more: bool,
-    #[serde(default)]
-    message_cache_key: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     read_cursors: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pending_reply_fingerprints: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing)]
     pending_reply_idempotency_keys: HashMap<String, String>,
+}
+
+impl StoredCredentials {
+    fn cached_state(&self) -> FeedbackStateCacheData {
+        FeedbackStateCacheData {
+            enroll_idempotency_key: self.enroll_idempotency_key.clone(),
+            refresh_idempotency_key: self.refresh_idempotency_key.clone(),
+            anonymous_id: self.anonymous_id.clone(),
+            pending_create_fingerprint: self.pending_create_fingerprint.clone(),
+            pending_create_idempotency_key: self.pending_create_idempotency_key.clone(),
+            inbox_items: self.inbox_items.clone(),
+            inbox_next_cursor: self.inbox_next_cursor.clone(),
+            inbox_has_more: self.inbox_has_more,
+            read_cursors: self.read_cursors.clone(),
+            pending_reply_fingerprints: self.pending_reply_fingerprints.clone(),
+            pending_reply_idempotency_keys: self.pending_reply_idempotency_keys.clone(),
+            ..FeedbackStateCacheData::default()
+        }
+        .with_current_version()
+    }
+
+    fn apply_cached_state(&mut self, cached: FeedbackStateCacheData) {
+        self.enroll_idempotency_key = cached.enroll_idempotency_key;
+        self.refresh_idempotency_key = cached.refresh_idempotency_key;
+        self.anonymous_id = cached.anonymous_id;
+        self.pending_create_fingerprint = cached.pending_create_fingerprint;
+        self.pending_create_idempotency_key = cached.pending_create_idempotency_key;
+        self.inbox_items = cached.inbox_items;
+        self.inbox_next_cursor = cached.inbox_next_cursor;
+        self.inbox_has_more = cached.inbox_has_more;
+        self.read_cursors = cached.read_cursors;
+        self.pending_reply_fingerprints = cached.pending_reply_fingerprints;
+        self.pending_reply_idempotency_keys = cached.pending_reply_idempotency_keys;
+    }
+
+    fn has_legacy_cached_state(&self) -> bool {
+        self.enroll_idempotency_key.is_some()
+            || self.refresh_idempotency_key.is_some()
+            || self.anonymous_id.is_some()
+            || self.pending_create_fingerprint.is_some()
+            || self.pending_create_idempotency_key.is_some()
+            || !self.inbox_items.is_empty()
+            || self.inbox_next_cursor.is_some()
+            || self.inbox_has_more
+            || !self.read_cursors.is_empty()
+            || !self.pending_reply_fingerprints.is_empty()
+            || !self.pending_reply_idempotency_keys.is_empty()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -170,18 +215,18 @@ pub struct FeedbackService {
     base_url: Option<String>,
     client_version: String,
     credential_store: Arc<dyn FeedbackCredentialStore>,
-    message_cache_dir: Option<PathBuf>,
+    cache_dir: Option<PathBuf>,
     state: Mutex<RuntimeState>,
 }
 
 impl FeedbackService {
     pub fn from_environment(data_dir: PathBuf, client_version: impl Into<String>) -> Self {
-        let message_cache_dir = data_dir.join("feedback-cache");
+        let cache_dir = data_dir.join("feedback-cache");
         Self::from_environment_with_credential_store(
             client_version,
             Arc::new(FileFeedbackCredentialStore::new(data_dir)),
         )
-        .with_message_cache_dir(message_cache_dir)
+        .with_cache_dir(cache_dir)
     }
 
     pub fn from_environment_with_credential_store(
@@ -210,13 +255,18 @@ impl FeedbackService {
             base_url,
             client_version,
             credential_store,
-            message_cache_dir: None,
+            cache_dir: None,
             state: Mutex::new(RuntimeState::default()),
         }
     }
 
     pub fn with_message_cache_dir(mut self, message_cache_dir: PathBuf) -> Self {
-        self.message_cache_dir = Some(message_cache_dir);
+        self.cache_dir = Some(message_cache_dir);
+        self
+    }
+
+    pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
+        self.cache_dir = Some(cache_dir);
         self
     }
 
@@ -262,7 +312,7 @@ impl FeedbackService {
             .insert(created.feedback_id.clone(), created.capability_token);
         next.pending_create_fingerprint = None;
         next.pending_create_idempotency_key = None;
-        if let Err(error) = self.persist(&next).await {
+        if let Err(error) = self.persist_credentials(&next).await {
             return Err(FeedbackError {
                 code: "CAPABILITY_SAVE_FAILED".to_string(),
                 message: "Feedback access could not be saved securely".to_string(),
@@ -272,6 +322,7 @@ impl FeedbackService {
             });
         }
         state.stored = next;
+        self.persist_cached_state_best_effort(&state.stored).await;
         Ok(SubmitFeedbackResponse {
             feedback_id: created.feedback_id,
             status: created.status,
@@ -282,8 +333,7 @@ impl FeedbackService {
     pub async fn access_state(&self) -> Result<FeedbackAccessState, FeedbackError> {
         let mut state = self.state.lock().await;
         self.ensure_existing_loaded(&mut state).await?;
-        let can_reuse_access =
-            state.stored.anonymous_id.is_some() && state.stored.refresh_token.is_some();
+        let can_reuse_access = state.stored.refresh_token.is_some();
         let has_history =
             !state.stored.capabilities.is_empty() || !state.stored.inbox_items.is_empty();
         Ok(FeedbackAccessState {
@@ -318,8 +368,7 @@ impl FeedbackService {
 
         let mut state = self.state.lock().await;
         self.ensure_existing_loaded(&mut state).await?;
-        let can_reuse_access =
-            state.stored.anonymous_id.is_some() && state.stored.refresh_token.is_some();
+        let can_reuse_access = state.stored.refresh_token.is_some();
         let items = received
             .items
             .into_iter()
@@ -354,8 +403,8 @@ impl FeedbackService {
         }
         next.inbox_next_cursor = next_cursor.clone();
         next.inbox_has_more = received.has_more;
-        self.persist(&next).await?;
         state.stored = next;
+        self.persist_cached_state_best_effort(&state.stored).await;
 
         Ok(FeedbackInboxPage {
             items,
@@ -490,8 +539,8 @@ impl FeedbackService {
         {
             record.status = acknowledged.feedback_status;
         }
-        self.persist(&next).await?;
         state.stored = next;
+        self.persist_cached_state_best_effort(&state.stored).await;
 
         Ok(AcknowledgeFeedbackResponse {
             read_through: acknowledged.read_cursor,
@@ -564,37 +613,32 @@ impl FeedbackService {
             content,
             created_at: replied.created_at,
         };
-        let cache = self.message_cache().await?;
-        let cached = match cache.load(&feedback_id).await {
-            Ok(cached) => cached,
-            Err(_) => {
-                cache.remove(&feedback_id).await.map_err(|_| {
-                    credential_error(
-                        "CACHE_RESET_FAILED",
-                        "Feedback message cache could not be reset",
-                    )
-                })?;
-                None
-            }
-        };
-        if let Some(mut cached) = cached {
-            if !cached
-                .messages
-                .iter()
-                .any(|existing| existing.message_id == message.message_id)
-            {
-                cached.messages.push(message.clone());
-                cached.messages.sort_by(|left, right| {
-                    left.created_at
-                        .cmp(&right.created_at)
-                        .then_with(|| left.message_id.cmp(&right.message_id))
-                });
-                cache.store(&cached).await.map_err(|_| {
-                    credential_error(
-                        "CACHE_SAVE_FAILED",
-                        "Feedback message cache could not be saved",
-                    )
-                })?;
+        if let Ok(cache) = self.message_cache().await {
+            let cached = match cache.load(&feedback_id).await {
+                Ok(cached) => cached,
+                Err(_) => {
+                    let _ = cache.remove(&feedback_id).await;
+                    None
+                }
+            };
+            if let Some(mut cached) = cached {
+                if !cached
+                    .messages
+                    .iter()
+                    .any(|existing| existing.message_id == message.message_id)
+                {
+                    cached.messages.push(message.clone());
+                    cached.messages.sort_by(|left, right| {
+                        left.created_at
+                            .cmp(&right.created_at)
+                            .then_with(|| left.message_id.cmp(&right.message_id))
+                    });
+                    if cache.store(&cached).await.is_err() {
+                        log::warn!(
+                            "Failed to save feedback message cache after a successful reply"
+                        );
+                    }
+                }
             }
         }
 
@@ -611,8 +655,8 @@ impl FeedbackService {
             record.status = replied.feedback_status;
             record.updated_at = message.created_at.clone();
         }
-        self.persist(&next).await?;
         state.stored = next;
+        self.persist_cached_state_best_effort(&state.stored).await;
 
         Ok(ReplyFeedbackResponse {
             message,
@@ -693,7 +737,7 @@ impl FeedbackService {
     }
 
     async fn message_cache(&self) -> Result<MessageCache, FeedbackError> {
-        let directory = self.message_cache_dir.clone().ok_or_else(|| {
+        let directory = self.cache_dir.clone().ok_or_else(|| {
             FeedbackError::new(
                 "CACHE_UNAVAILABLE",
                 "Feedback message cache is unavailable",
@@ -702,23 +746,13 @@ impl FeedbackService {
         })?;
         let mut state = self.state.lock().await;
         self.ensure_existing_loaded(&mut state).await?;
-        let key = match state
-            .stored
-            .message_cache_key
-            .as_deref()
-            .and_then(decode_cache_key)
-        {
-            Some(key) => key,
-            None => {
-                let mut key = [0u8; 32];
-                rand::rngs::OsRng.fill_bytes(&mut key);
-                let mut next = state.stored.clone();
-                next.message_cache_key = Some(BASE64.encode(key));
-                self.persist(&next).await?;
-                state.stored = next;
-                key
-            }
-        };
+        let key = cache_encryption_key(&state.stored.enroll_key).ok_or_else(|| {
+            FeedbackError::new(
+                "CACHE_UNAVAILABLE",
+                "Feedback message cache key is unavailable",
+                false,
+            )
+        })?;
         Ok(MessageCache::new(directory, key))
     }
 
@@ -772,8 +806,9 @@ impl FeedbackService {
         {
             record.can_open = false;
         }
-        if self.persist(&next).await.is_ok() {
+        if self.persist_credentials(&next).await.is_ok() {
             state.stored = next;
+            self.persist_cached_state_best_effort(&state.stored).await;
         }
     }
 
@@ -807,7 +842,7 @@ impl FeedbackService {
         let mut next = state.stored.clone();
         next.pending_create_fingerprint = Some(fingerprint);
         next.pending_create_idempotency_key = Some(key.clone());
-        self.persist(&next).await?;
+        self.persist_cached_state(&next).await?;
         state.stored = next;
         Ok(key)
     }
@@ -838,7 +873,7 @@ impl FeedbackService {
             .insert(feedback_id.to_string(), fingerprint);
         next.pending_reply_idempotency_keys
             .insert(feedback_id.to_string(), key.clone());
-        self.persist(&next).await?;
+        self.persist_cached_state(&next).await?;
         state.stored = next;
         Ok(key)
     }
@@ -910,7 +945,7 @@ impl FeedbackService {
                 }
             }
         }
-        if state.stored.refresh_token.is_none() || state.stored.anonymous_id.is_none() {
+        if state.stored.refresh_token.is_none() {
             return Err(FeedbackError::new(
                 "FEEDBACK_ACCESS_UNAVAILABLE",
                 "Saved feedback access is unavailable",
@@ -924,8 +959,9 @@ impl FeedbackService {
                 next.anonymous_id = None;
                 next.refresh_token = None;
                 next.refresh_idempotency_key = None;
-                self.persist(&next).await?;
+                self.persist_credentials(&next).await?;
                 state.stored = next;
+                self.persist_cached_state_best_effort(&state.stored).await;
                 state.access_token = None;
                 return Err(FeedbackError::new(
                     "FEEDBACK_ACCESS_EXPIRED",
@@ -974,8 +1010,9 @@ impl FeedbackService {
                     next.refresh_token = None;
                     next.refresh_idempotency_key = None;
                     next.capabilities.clear();
-                    self.persist(&next).await?;
+                    self.persist_credentials(&next).await?;
                     state.stored = next;
+                    self.persist_cached_state_best_effort(&state.stored).await;
                     state.access_token = None;
                     self.enroll(&mut state).await?
                 }
@@ -1003,7 +1040,7 @@ impl FeedbackService {
                 let mut next = state.stored.clone();
                 let key = Uuid::new_v4().to_string();
                 next.enroll_idempotency_key = Some(key.clone());
-                self.persist(&next).await?;
+                self.persist_cached_state(&next).await?;
                 state.stored = next;
                 key
             }
@@ -1035,7 +1072,7 @@ impl FeedbackService {
                 let mut next = state.stored.clone();
                 let key = Uuid::new_v4().to_string();
                 next.refresh_idempotency_key = Some(key.clone());
-                self.persist(&next).await?;
+                self.persist_cached_state(&next).await?;
                 state.stored = next;
                 key
             }
@@ -1071,8 +1108,9 @@ impl FeedbackService {
         if enrolled {
             next.enroll_idempotency_key = None;
         }
-        self.persist(&next).await?;
+        self.persist_credentials(&next).await?;
         state.stored = next;
+        self.persist_cached_state_best_effort(&state.stored).await;
         Ok(token)
     }
 
@@ -1080,7 +1118,7 @@ impl FeedbackService {
         self.ensure_existing_loaded(state).await?;
         if state.stored.enroll_key.is_empty() {
             state.stored.enroll_key = Uuid::new_v4().to_string();
-            self.persist(&state.stored).await?;
+            self.persist_credentials(&state.stored).await?;
         }
         Ok(())
     }
@@ -1104,11 +1142,39 @@ impl FeedbackService {
             })?,
             None => StoredCredentials::default(),
         };
+        let had_legacy_cached_state = state.stored.has_legacy_cached_state();
+        if let Some(cache) = self.state_cache(&state.stored) {
+            match cache.load().await {
+                Ok(Some(cached)) => state.stored.apply_cached_state(cached),
+                Ok(None) => {
+                    if had_legacy_cached_state {
+                        self.store_cached_state_best_effort(&cache, &state.stored)
+                            .await;
+                    }
+                }
+                Err(_) => {
+                    let _ = cache.remove().await;
+                    log::warn!("Feedback state cache was invalid and has been reset");
+                    if had_legacy_cached_state {
+                        self.store_cached_state_best_effort(&cache, &state.stored)
+                            .await;
+                    }
+                }
+            }
+        }
+        if had_legacy_cached_state {
+            if let Err(error) = self.persist_credentials(&state.stored).await {
+                log::warn!(
+                    "Failed to migrate feedback credentials away from legacy cache fields: code={}",
+                    error.code
+                );
+            }
+        }
         state.loaded = true;
         Ok(())
     }
 
-    async fn persist(&self, stored: &StoredCredentials) -> Result<(), FeedbackError> {
+    async fn persist_credentials(&self, stored: &StoredCredentials) -> Result<(), FeedbackError> {
         let value = serde_json::to_string(stored).map_err(|_| {
             credential_error(
                 "CREDENTIAL_SAVE_FAILED",
@@ -1121,6 +1187,41 @@ impl FeedbackService {
                 "Feedback access could not be saved securely",
             )
         })
+    }
+
+    async fn persist_cached_state(&self, stored: &StoredCredentials) -> Result<(), FeedbackError> {
+        let cache = self.state_cache(stored).ok_or_else(|| {
+            credential_error("CACHE_UNAVAILABLE", "Feedback state cache is unavailable")
+        })?;
+        cache.store(&stored.cached_state()).await.map_err(|_| {
+            credential_error(
+                "CACHE_SAVE_FAILED",
+                "Feedback state cache could not be saved",
+            )
+        })
+    }
+
+    async fn persist_cached_state_best_effort(&self, stored: &StoredCredentials) {
+        let Some(cache) = self.state_cache(stored) else {
+            return;
+        };
+        self.store_cached_state_best_effort(&cache, stored).await;
+    }
+
+    async fn store_cached_state_best_effort(
+        &self,
+        cache: &FeedbackStateCache,
+        stored: &StoredCredentials,
+    ) {
+        if cache.store(&stored.cached_state()).await.is_err() {
+            log::warn!("Failed to save feedback state cache; server data remains authoritative");
+        }
+    }
+
+    fn state_cache(&self, stored: &StoredCredentials) -> Option<FeedbackStateCache> {
+        let directory = self.cache_dir.clone()?;
+        let key = cache_encryption_key(&stored.enroll_key)?;
+        Some(FeedbackStateCache::new(directory, key))
     }
 }
 
@@ -1210,13 +1311,14 @@ fn page_from_cache(
     })
 }
 
-fn decode_cache_key(value: &str) -> Option<[u8; 32]> {
-    let bytes = BASE64.decode(value).ok()?;
-    let mut key = [0u8; 32];
-    (bytes.len() == key.len()).then(|| {
-        key.copy_from_slice(&bytes);
-        key
-    })
+fn cache_encryption_key(enroll_key: &str) -> Option<[u8; 32]> {
+    if enroll_key.is_empty() {
+        return None;
+    }
+    let mut digest = Sha256::new();
+    digest.update(b"bitfun-feedback-cache-v2\0");
+    digest.update(enroll_key.as_bytes());
+    Some(digest.finalize().into())
 }
 
 fn validate_feedback_id(feedback_id: &str) -> Result<(), FeedbackError> {
@@ -1437,6 +1539,36 @@ mod tests {
         assert_eq!(normalized.session_id_hash, None);
     }
 
+    #[test]
+    fn secure_credentials_exclude_rebuildable_feedback_state() {
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            refresh_token: Some("refresh".to_string()),
+            capabilities: HashMap::from([("feedback-1".to_string(), "capability".to_string())]),
+            anonymous_id: Some("anonymous".to_string()),
+            inbox_items: vec![FeedbackRecordSummary {
+                feedback_id: "feedback-1".to_string(),
+                category: FeedbackCategory::Other,
+                status: FeedbackStatus::Submitted,
+                has_new_reply: false,
+                created_at: "2026-07-30T01:00:00Z".to_string(),
+                updated_at: "2026-07-30T01:00:00Z".to_string(),
+                can_open: true,
+            }],
+            pending_create_idempotency_key: Some("idempotency".to_string()),
+            ..StoredCredentials::default()
+        };
+
+        let serialized = serde_json::to_value(&stored).unwrap();
+
+        assert_eq!(serialized["enroll_key"], "enroll");
+        assert_eq!(serialized["refresh_token"], "refresh");
+        assert_eq!(serialized["capabilities"]["feedback-1"], "capability");
+        assert!(serialized.get("anonymous_id").is_none());
+        assert!(serialized.get("inbox_items").is_none());
+        assert!(serialized.get("pending_create_idempotency_key").is_none());
+    }
+
     #[tokio::test]
     async fn access_state_does_not_create_an_identity() {
         let store = Arc::new(MemoryStore::default());
@@ -1478,12 +1610,14 @@ mod tests {
             value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
             ..MemoryStore::default()
         });
+        let cache_dir = test_cache_dir("inbox");
         let service = FeedbackService::new(
             Some(base_url),
             "1.0.0".to_string(),
-            store,
+            store.clone(),
             Duration::from_secs(2),
-        );
+        )
+        .with_cache_dir(cache_dir.clone());
 
         let page = service
             .list_feedback(ListFeedbackRecordsRequest {
@@ -1501,6 +1635,76 @@ mod tests {
         drop(captured);
         let restored = service.access_state().await.unwrap();
         assert!(restored.cached_inbox.items[0].has_new_reply);
+        let secure_value = store.value.lock().unwrap().clone().unwrap();
+        assert!(!secure_value.contains("inbox_items"));
+
+        let restarted =
+            FeedbackService::new(None, "1.0.0".to_string(), store, Duration::from_secs(2))
+                .with_cache_dir(cache_dir.clone());
+        let restored_after_restart = restarted.access_state().await.unwrap();
+        assert_eq!(restored_after_restart.cached_inbox.items.len(), 1);
+        assert!(restored_after_restart.cached_inbox.items[0].has_new_reply);
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn returns_refreshed_inbox_when_local_cache_write_fails() {
+        let responses = vec![
+            json_response(
+                200,
+                r#"{"anonymous_id":"anon","access_token":"fresh","refresh_token":"refresh-2","expires_in":3600,"refresh_expires_in":2592000,"scope":"feedback:write,feedback:read","schema_version":"1"}"#,
+            ),
+            json_response(
+                200,
+                r#"{"items":[{"feedback_id":"feedback-1","category":"other","status":"submitted","has_new_reply":false,"created_at":"2026-07-30T01:00:00Z","updated_at":"2026-07-30T01:00:00Z"}],"cursor":"","has_more":false}"#,
+            ),
+            json_response(
+                200,
+                r#"{"items":[{"feedback_id":"feedback-1","category":"other","status":"submitted","has_new_reply":false,"created_at":"2026-07-30T01:00:00Z","updated_at":"2026-07-30T01:00:00Z"},{"feedback_id":"feedback-2","category":"runtime_error","status":"submitted","has_new_reply":false,"created_at":"2026-07-30T01:05:00Z","updated_at":"2026-07-30T01:05:00Z"}],"cursor":"","has_more":false}"#,
+            ),
+        ];
+        let (base_url, _) = spawn_server(responses).await;
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            refresh_token: Some("refresh-1".to_string()),
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            ..MemoryStore::default()
+        });
+        let cache_dir = test_cache_dir("unwritable-cache");
+        let service = FeedbackService::new(
+            Some(base_url),
+            "1.0.0".to_string(),
+            store,
+            Duration::from_secs(2),
+        )
+        .with_cache_dir(cache_dir.clone());
+
+        let first = service
+            .list_feedback(ListFeedbackRecordsRequest {
+                cursor: None,
+                page_size: 20,
+            })
+            .await
+            .unwrap();
+        assert_eq!(first.items.len(), 1);
+
+        tokio::fs::remove_dir_all(&cache_dir).await.unwrap();
+        tokio::fs::write(&cache_dir, b"not a directory")
+            .await
+            .unwrap();
+        let second = service
+            .list_feedback(ListFeedbackRecordsRequest {
+                cursor: None,
+                page_size: 20,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(second.items.len(), 2);
+        let _ = tokio::fs::remove_file(cache_dir).await;
     }
 
     #[tokio::test]
@@ -1688,20 +1892,22 @@ mod tests {
     #[tokio::test]
     async fn rejects_replies_to_locally_known_resolved_feedback() {
         let feedback_id = "11111111-1111-4111-8111-111111111111";
-        let stored = StoredCredentials {
-            inbox_items: vec![FeedbackRecordSummary {
-                feedback_id: feedback_id.to_string(),
-                category: FeedbackCategory::Other,
-                status: FeedbackStatus::Resolved,
-                has_new_reply: false,
-                created_at: "2026-07-28T01:00:00Z".to_string(),
-                updated_at: "2026-07-28T02:00:00Z".to_string(),
-                can_open: true,
-            }],
-            ..StoredCredentials::default()
-        };
         let store = Arc::new(MemoryStore {
-            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            value: StdMutex::new(Some(
+                serde_json::json!({
+                    "enroll_key": "enroll",
+                    "inbox_items": [{
+                        "feedbackId": feedback_id,
+                        "category": "other",
+                        "status": "resolved",
+                        "hasNewReply": false,
+                        "createdAt": "2026-07-28T01:00:00Z",
+                        "updatedAt": "2026-07-28T02:00:00Z",
+                        "canOpen": true
+                    }]
+                })
+                .to_string(),
+            )),
             ..MemoryStore::default()
         });
         let service =
@@ -1736,13 +1942,15 @@ mod tests {
         ];
         let (base_url, requests) = spawn_server(responses).await;
         let store = Arc::new(MemoryStore::default());
-        store.fail_at.store(5, Ordering::SeqCst);
+        store.fail_at.store(3, Ordering::SeqCst);
+        let cache_dir = test_cache_dir("capability-save");
         let service = FeedbackService::new(
             Some(base_url),
             "1.0.0".to_string(),
             store,
             Duration::from_secs(2),
-        );
+        )
+        .with_cache_dir(cache_dir.clone());
         let request = SubmitFeedbackRequest {
             category: FeedbackCategory::Other,
             content: "privacy-safe feedback".to_string(),
@@ -1763,6 +1971,7 @@ mod tests {
             .collect();
         assert_eq!(create_keys.len(), 2);
         assert_eq!(create_keys[0], create_keys[1]);
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
     }
 
     #[tokio::test]
@@ -1786,12 +1995,14 @@ mod tests {
             ),
         ];
         let (base_url, requests) = spawn_server(responses).await;
+        let cache_dir = test_cache_dir("unauthorized-recovery");
         let service = FeedbackService::new(
             Some(base_url),
             "1.0.0".to_string(),
             Arc::new(MemoryStore::default()),
             Duration::from_secs(2),
-        );
+        )
+        .with_cache_dir(cache_dir.clone());
         service
             .submit_feedback(SubmitFeedbackRequest {
                 category: FeedbackCategory::Other,
@@ -1811,6 +2022,16 @@ mod tests {
             header(&captured[1], "idempotency-key"),
             header(&captured[3], "idempotency-key")
         );
+        drop(captured);
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
+    }
+
+    fn test_cache_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "bitfun-feedback-{name}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
     }
 
     fn json_response(status: u16, body: &str) -> String {

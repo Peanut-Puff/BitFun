@@ -2,7 +2,9 @@ import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { asset } from '@kit.AssetStoreKit';
 
-const ASSET_ALIAS = 'bitfun.feedback.credentials.v1';
+const CORE_ASSET_ALIAS = 'bitfun.feedback.credentials.v1';
+const CAPABILITY_ASSET_PREFIX = 'bitfun.feedback.capability.v1.';
+const CAPABILITY_GROUP = 'bitfun.feedback.capabilities.v1';
 const ASSET_NOT_FOUND = 24000002;
 const ASSET_ALREADY_EXISTS = 24000003;
 
@@ -17,10 +19,28 @@ interface CredentialResponse {
   code?: string;
 }
 
+interface StoredCredentialPayload {
+  enroll_key?: string;
+  refresh_token?: string;
+  capabilities?: Record<string, string>;
+}
+
+interface CoreCredentialPayload {
+  enroll_key: string;
+  refresh_token?: string;
+}
+
+interface StoredCapability {
+  feedbackId: string;
+  token: string;
+  alias: Uint8Array;
+}
+
 export class FeedbackCredentialStore {
   private readonly encoder = new util.TextEncoder();
   private readonly decoder = util.TextDecoder.create('utf-8');
-  private readonly alias = this.encoder.encodeInto(ASSET_ALIAS);
+  private readonly coreAlias = this.encoder.encodeInto(CORE_ASSET_ALIAS);
+  private readonly capabilityGroup = this.encoder.encodeInto(CAPABILITY_GROUP);
 
   async handle(input: string): Promise<string> {
     try {
@@ -43,8 +63,23 @@ export class FeedbackCredentialStore {
   }
 
   private async load(): Promise<CredentialResponse> {
+    const core = await this.loadCore();
+    if (core.status !== 'ok' || core.value === undefined) {
+      return core;
+    }
+    const payload = JSON.parse(core.value) as StoredCredentialPayload;
+    const capabilities: Record<string, string> = payload.capabilities ?? {};
+    const storedCapabilities = await this.queryCapabilities();
+    storedCapabilities.forEach((item: StoredCapability) => {
+      capabilities[item.feedbackId] = item.token;
+    });
+    payload.capabilities = capabilities;
+    return { status: 'ok', value: JSON.stringify(payload) };
+  }
+
+  private async loadCore(): Promise<CredentialResponse> {
     const query: asset.AssetMap = new Map();
-    query.set(asset.Tag.ALIAS, this.alias);
+    query.set(asset.Tag.ALIAS, this.coreAlias);
     query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ALL);
     try {
       const results = await asset.query(query);
@@ -66,8 +101,68 @@ export class FeedbackCredentialStore {
   }
 
   private async store(value: string): Promise<void> {
+    const payload = JSON.parse(value) as StoredCredentialPayload;
+    const capabilities: Record<string, string> = payload.capabilities ?? {};
+    await this.synchronizeCapabilities(capabilities);
+
+    const core: CoreCredentialPayload = {
+      enroll_key: payload.enroll_key ?? ''
+    };
+    if (payload.refresh_token !== undefined) {
+      core.refresh_token = payload.refresh_token;
+    }
+    await this.upsertAsset(this.coreAlias, JSON.stringify(core));
+  }
+
+  private async synchronizeCapabilities(capabilities: Record<string, string>): Promise<void> {
+    const existing = await this.queryCapabilities();
+    const desiredIds = Object.keys(capabilities);
+    for (const feedbackId of desiredIds) {
+      const alias = this.encoder.encodeInto(`${CAPABILITY_ASSET_PREFIX}${feedbackId}`);
+      await this.upsertAsset(alias, capabilities[feedbackId], feedbackId);
+    }
+    for (const item of existing) {
+      if (desiredIds.indexOf(item.feedbackId) < 0) {
+        const query: asset.AssetMap = new Map();
+        query.set(asset.Tag.ALIAS, item.alias);
+        await asset.remove(query);
+      }
+    }
+  }
+
+  private async queryCapabilities(): Promise<StoredCapability[]> {
     const query: asset.AssetMap = new Map();
-    query.set(asset.Tag.ALIAS, this.alias);
+    query.set(asset.Tag.DATA_LABEL_NORMAL_1, this.capabilityGroup);
+    query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ALL);
+    query.set(asset.Tag.RETURN_LIMIT, 1000);
+    try {
+      const results = await asset.query(query);
+      const capabilities: StoredCapability[] = [];
+      results.forEach((item: asset.AssetMap) => {
+        const alias = item.get(asset.Tag.ALIAS) as Uint8Array;
+        const feedbackId = item.get(asset.Tag.DATA_LABEL_NORMAL_2) as Uint8Array;
+        const secret = item.get(asset.Tag.SECRET) as Uint8Array;
+        if (alias !== undefined && feedbackId !== undefined && secret !== undefined) {
+          capabilities.push({
+            feedbackId: this.decoder.decodeToString(feedbackId),
+            token: this.decoder.decodeToString(secret),
+            alias
+          });
+        }
+      });
+      return capabilities;
+    } catch (error) {
+      const businessError = error as BusinessError;
+      if (businessError.code === ASSET_NOT_FOUND) {
+        return [];
+      }
+      throw new Error(String(businessError.code ?? 'UNKNOWN'));
+    }
+  }
+
+  private async upsertAsset(alias: Uint8Array, value: string, feedbackId?: string): Promise<void> {
+    const query: asset.AssetMap = new Map();
+    query.set(asset.Tag.ALIAS, alias);
     const update: asset.AssetMap = new Map();
     update.set(asset.Tag.SECRET, this.encoder.encodeInto(value));
     try {
@@ -81,11 +176,15 @@ export class FeedbackCredentialStore {
     }
 
     const attributes: asset.AssetMap = new Map();
-    attributes.set(asset.Tag.ALIAS, this.alias);
+    attributes.set(asset.Tag.ALIAS, alias);
     attributes.set(asset.Tag.SECRET, this.encoder.encodeInto(value));
     attributes.set(asset.Tag.ACCESSIBILITY, asset.Accessibility.DEVICE_FIRST_UNLOCKED);
     attributes.set(asset.Tag.AUTH_TYPE, asset.AuthType.NONE);
     attributes.set(asset.Tag.SYNC_TYPE, asset.SyncType.NEVER);
+    if (feedbackId !== undefined) {
+      attributes.set(asset.Tag.DATA_LABEL_NORMAL_1, this.capabilityGroup);
+      attributes.set(asset.Tag.DATA_LABEL_NORMAL_2, this.encoder.encodeInto(feedbackId));
+    }
     try {
       await asset.add(attributes);
     } catch (error) {

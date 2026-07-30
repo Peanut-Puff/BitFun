@@ -395,7 +395,7 @@ pub async fn _run() {
                 env!("CARGO_PKG_VERSION"),
                 credential_store,
             )
-            .with_message_cache_dir(PathBuf::from(
+            .with_cache_dir(PathBuf::from(
                 "/data/storage/el2/base/cache/bitfun/feedback",
             )),
         )
