@@ -63,15 +63,6 @@ export const FeedbackInboxView: React.FC<FeedbackInboxViewProps> = ({
           {error ? (
             <div className="bitfun-feedback__inbox-error" role="alert">
               <span>{inboxErrorText(error.code, t)}</span>
-              <Button
-                type="button"
-                variant="ghost"
-                size="small"
-                disabled={loading}
-                onClick={() => void refresh(true)}
-              >
-                {t('feedback.actions.retry')}
-              </Button>
             </div>
           ) : null}
           {loading && records.length === 0 ? (
