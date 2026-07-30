@@ -1,12 +1,24 @@
 import { util } from '@kit.ArkTS';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { asset } from '@kit.AssetStoreKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 
 const CORE_ASSET_ALIAS = 'bitfun.feedback.credentials.v1';
 const CAPABILITY_ASSET_PREFIX = 'bitfun.feedback.capability.v1.';
 const CAPABILITY_GROUP = 'bitfun.feedback.capabilities.v1';
 const ASSET_NOT_FOUND = 24000002;
 const ASSET_ALREADY_EXISTS = 24000003;
+const LOG_DOMAIN = 0x0000;
+const LOG_TAG = 'FeedbackCredentialStore';
+
+class AssetStoreOperationError extends Error {
+  readonly code: number;
+
+  constructor(code: number) {
+    super('AssetStore operation failed');
+    this.code = code;
+  }
+}
 
 interface CredentialRequest {
   action: string;
@@ -30,10 +42,13 @@ interface CoreCredentialPayload {
   refresh_token?: string;
 }
 
-interface StoredCapability {
+interface StoredCapabilityMetadata {
   feedbackId: string;
-  token: string;
   alias: Uint8Array;
+}
+
+interface StoredCapability extends StoredCapabilityMetadata {
+  token: string;
 }
 
 export class FeedbackCredentialStore {
@@ -43,8 +58,10 @@ export class FeedbackCredentialStore {
   private readonly capabilityGroup = this.encoder.encodeInto(CAPABILITY_GROUP);
 
   async handle(input: string): Promise<string> {
+    let action = 'parse';
     try {
       const request: CredentialRequest = JSON.parse(input);
+      action = request.action;
       if (request.action === 'load') {
         return JSON.stringify(await this.load());
       }
@@ -55,9 +72,17 @@ export class FeedbackCredentialStore {
       return JSON.stringify({ status: 'error', code: 'REQUEST_INVALID' } as CredentialResponse);
     } catch (error) {
       const businessError = error as BusinessError;
+      const code = businessError.code === undefined ? 'INTERNAL_ERROR' : String(businessError.code);
+      hilog.error(
+        LOG_DOMAIN,
+        LOG_TAG,
+        'Secure credential operation failed: action=%{public}s code=%{public}s',
+        action,
+        code
+      );
       return JSON.stringify({
         status: 'error',
-        code: businessError.code === undefined ? 'INTERNAL_ERROR' : String(businessError.code)
+        code
       } as CredentialResponse);
     }
   }
@@ -96,7 +121,7 @@ export class FeedbackCredentialStore {
       if (businessError.code === ASSET_NOT_FOUND) {
         return { status: 'not_found' };
       }
-      throw new Error(String(businessError.code ?? 'UNKNOWN'));
+      throw new AssetStoreOperationError(businessError.code ?? -1);
     }
   }
 
@@ -115,7 +140,7 @@ export class FeedbackCredentialStore {
   }
 
   private async synchronizeCapabilities(capabilities: Record<string, string>): Promise<void> {
-    const existing = await this.queryCapabilities();
+    const existing = await this.queryCapabilityMetadata();
     const desiredIds = Object.keys(capabilities);
     for (const feedbackId of desiredIds) {
       const alias = this.encoder.encodeInto(`${CAPABILITY_ASSET_PREFIX}${feedbackId}`);
@@ -131,21 +156,33 @@ export class FeedbackCredentialStore {
   }
 
   private async queryCapabilities(): Promise<StoredCapability[]> {
+    const metadata = await this.queryCapabilityMetadata();
+    const capabilities: StoredCapability[] = [];
+    for (const item of metadata) {
+      const token = await this.loadCapabilitySecret(item.alias);
+      capabilities.push({
+        feedbackId: item.feedbackId,
+        token,
+        alias: item.alias
+      });
+    }
+    return capabilities;
+  }
+
+  private async queryCapabilityMetadata(): Promise<StoredCapabilityMetadata[]> {
     const query: asset.AssetMap = new Map();
     query.set(asset.Tag.DATA_LABEL_NORMAL_1, this.capabilityGroup);
-    query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ALL);
+    query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ATTRIBUTES);
     query.set(asset.Tag.RETURN_LIMIT, 1000);
     try {
       const results = await asset.query(query);
-      const capabilities: StoredCapability[] = [];
+      const capabilities: StoredCapabilityMetadata[] = [];
       results.forEach((item: asset.AssetMap) => {
         const alias = item.get(asset.Tag.ALIAS) as Uint8Array;
         const feedbackId = item.get(asset.Tag.DATA_LABEL_NORMAL_2) as Uint8Array;
-        const secret = item.get(asset.Tag.SECRET) as Uint8Array;
-        if (alias !== undefined && feedbackId !== undefined && secret !== undefined) {
+        if (alias !== undefined && feedbackId !== undefined) {
           capabilities.push({
             feedbackId: this.decoder.decodeToString(feedbackId),
-            token: this.decoder.decodeToString(secret),
             alias
           });
         }
@@ -156,8 +193,20 @@ export class FeedbackCredentialStore {
       if (businessError.code === ASSET_NOT_FOUND) {
         return [];
       }
-      throw new Error(String(businessError.code ?? 'UNKNOWN'));
+      throw new AssetStoreOperationError(businessError.code ?? -1);
     }
+  }
+
+  private async loadCapabilitySecret(alias: Uint8Array): Promise<string> {
+    const query: asset.AssetMap = new Map();
+    query.set(asset.Tag.ALIAS, alias);
+    query.set(asset.Tag.RETURN_TYPE, asset.ReturnType.ALL);
+    const results = await asset.query(query);
+    const secret = results[0]?.get(asset.Tag.SECRET) as Uint8Array;
+    if (secret === undefined) {
+      throw new Error('SECRET_MISSING');
+    }
+    return this.decoder.decodeToString(secret);
   }
 
   private async upsertAsset(alias: Uint8Array, value: string, feedbackId?: string): Promise<void> {
@@ -171,7 +220,7 @@ export class FeedbackCredentialStore {
     } catch (error) {
       const businessError = error as BusinessError;
       if (businessError.code !== ASSET_NOT_FOUND) {
-        throw new Error(String(businessError.code ?? 'UNKNOWN'));
+        throw new AssetStoreOperationError(businessError.code ?? -1);
       }
     }
 
@@ -190,7 +239,7 @@ export class FeedbackCredentialStore {
     } catch (error) {
       const businessError = error as BusinessError;
       if (businessError.code !== ASSET_ALREADY_EXISTS) {
-        throw new Error(String(businessError.code ?? 'UNKNOWN'));
+        throw new AssetStoreOperationError(businessError.code ?? -1);
       }
       await asset.update(query, update);
     }
