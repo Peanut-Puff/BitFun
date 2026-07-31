@@ -112,7 +112,9 @@
       "unavailable": "目前沒有可關聯的工作階段。"
     },
     "privacyConsent": "我已閱讀並同意《隱私聲明》",
-    "viewPrivacy": "查看隱私聲明",
+    "privacyConsentPrefix": "我已閱讀並同意《",
+    "privacyStatement": "隱私聲明",
+    "privacyConsentSuffix": "》",
     "actions": {
       "cancel": "取消",
       "submit": "提交反饋",
@@ -166,8 +168,9 @@
       "input": "回覆內容",
       "placeholder": "輸入對該反饋的回覆",
       "send": "傳送回覆",
-      "consentTitle": "同意隱私協議後傳送",
-      "consentMessage": "傳送回覆需要先儲存目前版本的隱私同意。",
+      "consentTitle": "同意後傳送",
+      "consentPrefix": "需要同意《",
+      "consentSuffix": "》方可傳送回覆。",
       "consentConfirm": "同意並傳送",
       "consentSaveFailed": "隱私同意未能儲存，回覆尚未傳送。你可以重試或取消。",
       "privacySaveFailed": "隱私同意未能儲存，回覆尚未傳送。目前仍按未同意規則執行。",

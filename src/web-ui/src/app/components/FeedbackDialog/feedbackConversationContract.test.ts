@@ -52,6 +52,25 @@ describe('feedback conversation contract', () => {
     expect(source).toContain('if (!sending) setShowConsent(false)');
   });
 
+  it('opens the read-only privacy statement from the inline reply consent prompt', () => {
+    const source = readSource('./FeedbackConversationView.tsx');
+    const zh = JSON.parse(readSource('../../../locales/zh-CN/common.json')) as {
+      feedback: {
+        privacyStatement: string;
+        reply: { consentPrefix: string; consentSuffix: string };
+      };
+    };
+
+    expect(source).toContain("t('feedback.reply.consentPrefix')");
+    expect(source).toContain('<PrivacyStatementLink');
+    expect(source).toContain("t('feedback.reply.consentSuffix')");
+    expect(source).toContain('<PrivacyStatementDialog');
+    expect(source).toContain('variant="readonly"');
+    expect(
+      `${zh.feedback.reply.consentPrefix}${zh.feedback.privacyStatement}${zh.feedback.reply.consentSuffix}`,
+    ).toBe('需要同意《隐私声明》方可发送回复。');
+  });
+
   it('freezes reply interactions and requires confirmation before discarding a draft', () => {
     const conversation = readSource('./FeedbackConversationView.tsx');
     const dialog = readSource('./FeedbackDialog.tsx');

@@ -40,6 +40,20 @@ describe('OpenHarmony feedback submission contract', () => {
     expect(layout).toContain('await confirmCriticalOperationExit()');
   });
 
+  it('opens the read-only privacy statement from inline consent copy', () => {
+    const dialog = readSource('./FeedbackDialog.tsx');
+    const privacySection = dialog.slice(
+      dialog.indexOf('className="bitfun-feedback__privacy"'),
+      dialog.indexOf('{submitError ?'),
+    );
+
+    expect(privacySection).toContain('<PrivacyStatementLink');
+    expect(privacySection).toContain("t('feedback.privacyConsentPrefix')");
+    expect(privacySection).toContain("t('feedback.privacyConsentSuffix')");
+    expect(privacySection).not.toContain('feedback.viewPrivacy');
+    expect(dialog).toContain('variant="readonly"');
+  });
+
   it('shows a single completion action after capability-backed success', () => {
     const dialog = readSource('./FeedbackDialog.tsx');
     const completeView = dialog.slice(

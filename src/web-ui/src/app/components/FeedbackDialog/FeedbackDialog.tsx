@@ -24,6 +24,7 @@ import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
 import { createLogger } from '@/shared/utils/logger';
 import { registerCriticalOperationExitGuard } from '@/shared/services/criticalOperationExitGuard';
 import { FeedbackInboxView } from './FeedbackInboxView';
+import { PrivacyStatementLink } from './PrivacyStatementLink';
 import { useFeedbackInboxStore } from './feedbackInboxStore';
 import './FeedbackDialog.scss';
 
@@ -371,21 +372,20 @@ export const FeedbackDialog: React.FC<FeedbackDialogProps> = ({ isOpen, onClose 
               <Checkbox
                 checked={privacyChecked}
                 disabled={submitting}
+                aria-label={t('feedback.privacyConsent')}
                 onChange={event => {
                   setPrivacyChecked(event.target.checked);
                   setSubmitError(null);
                 }}
-                label={t('feedback.privacyConsent')}
               />
-              <Button
-                type="button"
-                variant="ghost"
-                size="small"
-                disabled={submitting}
-                onClick={() => setShowPrivacy(true)}
-              >
-                {t('feedback.viewPrivacy')}
-              </Button>
+              <span>
+                {t('feedback.privacyConsentPrefix')}
+                <PrivacyStatementLink
+                  disabled={submitting}
+                  onClick={() => setShowPrivacy(true)}
+                />
+                {t('feedback.privacyConsentSuffix')}
+              </span>
             </div>
             {submitError ? (
               <div className="bitfun-feedback__error" role="alert">

@@ -112,7 +112,9 @@
       "unavailable": "There is no current session to link."
     },
     "privacyConsent": "I have read and agree to the Privacy Statement",
-    "viewPrivacy": "View privacy statement",
+    "privacyConsentPrefix": "I have read and agree to the ",
+    "privacyStatement": "Privacy Statement",
+    "privacyConsentSuffix": "",
     "actions": {
       "cancel": "Cancel",
       "submit": "Submit feedback",
@@ -166,8 +168,9 @@
       "input": "Reply",
       "placeholder": "Write a reply to this feedback",
       "send": "Send reply",
-      "consentTitle": "Accept privacy terms to send",
-      "consentMessage": "Sending this reply requires saving consent to the current privacy terms first.",
+      "consentTitle": "Accept before sending",
+      "consentPrefix": "You need to accept the ",
+      "consentSuffix": " before sending a reply.",
       "consentConfirm": "Accept and send",
       "consentSaveFailed": "Privacy consent could not be saved, so the reply was not sent. Retry or cancel.",
       "privacySaveFailed": "Privacy consent could not be saved, so the reply was not sent. Privacy-not-accepted rules remain active.",

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { LockKeyhole, RefreshCw, Send } from 'lucide-react';
 import { Button, ConfirmDialog, IconButton, Textarea } from '@/component-library';
 import { usePrivacy } from '@/app/components/Privacy/PrivacyContext';
+import { PrivacyStatementDialog } from '@/app/components/Privacy/PrivacyStatementDialog';
 import {
   feedbackAPI,
   FeedbackApiError,
@@ -11,6 +12,7 @@ import {
   truncateFeedbackContent,
 } from '@/infrastructure/api';
 import { useI18n } from '@/infrastructure/i18n/hooks/useI18n';
+import { PrivacyStatementLink } from './PrivacyStatementLink';
 import { useFeedbackInboxStore } from './feedbackInboxStore';
 
 interface FeedbackConversationViewProps {
@@ -41,6 +43,7 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
   const [sending, setSending] = useState(false);
   const [replyError, setReplyError] = useState<ReplyError>(null);
   const [showConsent, setShowConsent] = useState(false);
+  const [showPrivacy, setShowPrivacy] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const topSentinelRef = useRef<HTMLDivElement>(null);
   const visibleAdminTimesRef = useRef(new Set<string>());
@@ -418,14 +421,31 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
         }}
         onConfirm={() => void acceptAndSend()}
         title={t('feedback.reply.consentTitle')}
-        message={replyError === 'PRIVACY_SAVE_FAILED'
-          ? t('feedback.reply.consentSaveFailed')
-          : t('feedback.reply.consentMessage')}
+        message={(
+          <div className="bitfun-feedback__consent-message">
+            {replyError === 'PRIVACY_SAVE_FAILED' ? (
+              <span>{t('feedback.reply.consentSaveFailed')}</span>
+            ) : null}
+            <span>
+              {t('feedback.reply.consentPrefix')}
+              <PrivacyStatementLink
+                disabled={sending}
+                onClick={() => setShowPrivacy(true)}
+              />
+              {t('feedback.reply.consentSuffix')}
+            </span>
+          </div>
+        )}
         confirmText={t('feedback.reply.consentConfirm')}
         cancelText={t('feedback.actions.cancel')}
         confirmDisabled={sending}
         cancelDisabled={sending}
         confirmLoading={sending}
+      />
+      <PrivacyStatementDialog
+        isOpen={showPrivacy}
+        onClose={() => setShowPrivacy(false)}
+        variant="readonly"
       />
     </div>
   );

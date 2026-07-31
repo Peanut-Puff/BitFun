@@ -112,7 +112,9 @@
       "unavailable": "当前没有可关联的会话。"
     },
     "privacyConsent": "我已阅读并同意《隐私声明》",
-    "viewPrivacy": "查看隐私声明",
+    "privacyConsentPrefix": "我已阅读并同意《",
+    "privacyStatement": "隐私声明",
+    "privacyConsentSuffix": "》",
     "actions": {
       "cancel": "取消",
       "submit": "提交反馈",
@@ -166,8 +168,9 @@
       "input": "回复内容",
       "placeholder": "输入对该反馈的回复",
       "send": "发送回复",
-      "consentTitle": "同意隐私协议后发送",
-      "consentMessage": "发送回复需要先保存当前版本的隐私同意。",
+      "consentTitle": "同意后发送",
+      "consentPrefix": "需要同意《",
+      "consentSuffix": "》方可发送回复。",
       "consentConfirm": "同意并发送",
       "consentSaveFailed": "隐私同意未能保存，回复尚未发送。你可以重试或取消。",
       "privacySaveFailed": "隐私同意未能保存，回复尚未发送。当前仍按未同意规则运行。",
