@@ -441,7 +441,7 @@ impl FeedbackService {
                 .synchronize_messages(&request.feedback_id, &cache, &mut data)
                 .await
             {
-                if is_capability_error(&error.code) {
+                if is_terminal_capability_error(&error.code) {
                     self.invalidate_conversation_access(&request.feedback_id, &cache)
                         .await;
                     return Err(error);
@@ -492,7 +492,7 @@ impl FeedbackService {
         {
             Ok(response) => response,
             Err(error) => {
-                if is_capability_error(&error.code) {
+                if is_terminal_capability_error(&error.code) {
                     let cache = self.message_cache().await?;
                     self.invalidate_conversation_access(&feedback_id, &cache)
                         .await;
@@ -504,7 +504,7 @@ impl FeedbackService {
             match decode_success(response, StatusCode::OK).await {
                 Ok(value) => value,
                 Err(error) => {
-                    if is_capability_error(&error.code) {
+                    if is_terminal_capability_error(&error.code) {
                         let cache = self.message_cache().await?;
                         self.invalidate_conversation_access(&feedback_id, &cache)
                             .await;
@@ -576,7 +576,7 @@ impl FeedbackService {
         {
             Ok(response) => response,
             Err(error) => {
-                if is_capability_error(&error.code) {
+                if is_terminal_capability_error(&error.code) {
                     let cache = self.message_cache().await?;
                     self.invalidate_conversation_access(&feedback_id, &cache)
                         .await;
@@ -587,7 +587,7 @@ impl FeedbackService {
         let replied: ReplyResponseBody = match decode_success(response, StatusCode::CREATED).await {
             Ok(value) => value,
             Err(error) => {
-                if is_capability_error(&error.code) {
+                if is_terminal_capability_error(&error.code) {
                     let cache = self.message_cache().await?;
                     self.invalidate_conversation_access(&feedback_id, &cache)
                         .await;
@@ -1333,20 +1333,10 @@ fn validate_timestamp(timestamp: &str) -> Result<(), FeedbackError> {
         .map_err(|_| FeedbackError::validation("TIMESTAMP_INVALID", "Timestamp is invalid"))
 }
 
-fn is_capability_error(code: &str) -> bool {
+fn is_terminal_capability_error(code: &str) -> bool {
     matches!(
         code,
-        "CAPABILITY_UNAVAILABLE"
-            | "CAPABILITY_INVALID"
-            | "CAPABILITY_EXPIRED"
-            | "CAPABILITY_REVOKED"
-            | "CAPABILITY_REQUIRED"
-            | "FEEDBACK_ACCESS_DENIED"
-            | "FEEDBACK_NOT_FOUND"
-            | "FEEDBACK_ACCESS_UNAVAILABLE"
-            | "FEEDBACK_ACCESS_EXPIRED"
-            | "SCOPE_INSUFFICIENT"
-            | "INSTANCE_BANNED"
+        "CAPABILITY_INVALID" | "CAPABILITY_EXPIRED" | "CAPABILITY_REVOKED"
     )
 }
 
@@ -1482,7 +1472,10 @@ fn credential_error(code: &str, message: &str) -> FeedbackError {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_request, parse_scopes, FeedbackService, StoredCredentials};
+    use super::{
+        is_terminal_capability_error, normalize_request, parse_scopes, FeedbackService,
+        StoredCredentials,
+    };
     use crate::feedback::FeedbackCredentialStore;
     use anyhow::{anyhow, Result};
     use async_trait::async_trait;
@@ -1525,6 +1518,30 @@ mod tests {
             parse_scopes("config:read,feedback:write feedback:read"),
             vec!["config:read", "feedback:write", "feedback:read"]
         );
+    }
+
+    #[test]
+    fn only_explicit_terminal_capability_errors_invalidate_conversation_access() {
+        for code in [
+            "CAPABILITY_INVALID",
+            "CAPABILITY_EXPIRED",
+            "CAPABILITY_REVOKED",
+        ] {
+            assert!(is_terminal_capability_error(code), "{code}");
+        }
+        for code in [
+            "CAPABILITY_UNAVAILABLE",
+            "CAPABILITY_REQUIRED",
+            "FEEDBACK_ACCESS_DENIED",
+            "FEEDBACK_NOT_FOUND",
+            "FEEDBACK_ACCESS_UNAVAILABLE",
+            "FEEDBACK_ACCESS_EXPIRED",
+            "SCOPE_INSUFFICIENT",
+            "INSTANCE_BANNED",
+            "ACCESS_TOKEN_INVALID",
+        ] {
+            assert!(!is_terminal_capability_error(code), "{code}");
+        }
     }
 
     #[test]
@@ -1801,6 +1818,62 @@ mod tests {
         assert!(captured[3]
             .starts_with("POST /support/v1/feedback/11111111-1111-4111-8111-111111111111/ack "));
         drop(captured);
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn preserves_capability_when_conversation_sync_is_denied_by_scope() {
+        let feedback_id = "11111111-1111-4111-8111-111111111111";
+        let responses = vec![
+            json_response(
+                200,
+                r#"{"anonymous_id":"anon","access_token":"fresh","refresh_token":"refresh-2","expires_in":3600,"refresh_expires_in":2592000,"scope":"feedback:write,feedback:read","schema_version":"1"}"#,
+            ),
+            json_response(
+                403,
+                r#"{"error_code":"SCOPE_INSUFFICIENT","request_id":"request-scope"}"#,
+            ),
+        ];
+        let (base_url, _) = spawn_server(responses).await;
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            anonymous_id: Some("anon".to_string()),
+            refresh_token: Some("refresh-1".to_string()),
+            capabilities: HashMap::from([(
+                feedback_id.to_string(),
+                "capability-secret".to_string(),
+            )]),
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(serde_json::to_string(&stored).unwrap())),
+            ..MemoryStore::default()
+        });
+        let cache_dir = test_cache_dir("scope-preserves-capability");
+        let service = FeedbackService::new(
+            Some(base_url),
+            "1.0.0".to_string(),
+            store.clone(),
+            Duration::from_secs(2),
+        )
+        .with_message_cache_dir(cache_dir.clone());
+
+        let page = service
+            .open_conversation(OpenFeedbackConversationRequest {
+                feedback_id: feedback_id.to_string(),
+                cursor: None,
+                page_size: 20,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page.sync_error.as_ref().unwrap().code, "SCOPE_INSUFFICIENT");
+        let secure_value = store.value.lock().unwrap().clone().unwrap();
+        let persisted: StoredCredentials = serde_json::from_str(&secure_value).unwrap();
+        assert_eq!(
+            persisted.capabilities.get(feedback_id).map(String::as_str),
+            Some("capability-secret")
+        );
         let _ = tokio::fs::remove_dir_all(cache_dir).await;
     }
 
