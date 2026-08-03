@@ -81,12 +81,18 @@ describe('FeedbackAPI', () => {
   it('opens message history through the local paging contract', async () => {
     const { feedbackAPI } = await import('./FeedbackAPI');
     invokeMock.mockResolvedValue({
-      messages: [],
+      messages: [{
+        messageId: 'message-deleted',
+        sender: 'admin',
+        content: 'Message content was deleted',
+        contentDeleted: true,
+        createdAt: '2026-07-28T02:00:00Z',
+      }],
       nextCursor: 'cache:50',
       hasMore: true,
     });
 
-    await feedbackAPI.openConversation({ feedbackId: 'feedback-1' });
+    const page = await feedbackAPI.openConversation({ feedbackId: 'feedback-1' });
 
     expect(invokeMock).toHaveBeenCalledWith(
       'open_feedback_conversation',
@@ -100,6 +106,7 @@ describe('FeedbackAPI', () => {
       },
       { retries: 0 },
     );
+    expect(page.messages[0].contentDeleted).toBe(true);
   });
 
   it('sends replies through a structured request without adapter retries', async () => {
@@ -109,6 +116,7 @@ describe('FeedbackAPI', () => {
         messageId: 'message-1',
         sender: 'user',
         content: 'reply',
+        contentDeleted: false,
         createdAt: '2026-07-28T03:00:00Z',
       },
       feedbackStatus: 'in_progress',

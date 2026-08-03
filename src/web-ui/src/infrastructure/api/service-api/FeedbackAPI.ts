@@ -50,6 +50,7 @@ export interface FeedbackMessage {
   messageId: string;
   sender: FeedbackSender;
   content: string;
+  contentDeleted: boolean;
   createdAt: string;
 }
 

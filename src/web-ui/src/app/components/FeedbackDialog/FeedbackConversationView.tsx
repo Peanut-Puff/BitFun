@@ -365,7 +365,8 @@ export const FeedbackConversationView: React.FC<FeedbackConversationViewProps> =
         {messages.map(message => (
           <article
             key={message.messageId}
-            className={`bitfun-feedback__message is-${message.sender}`}
+            className={`bitfun-feedback__message is-${message.sender}${message.contentDeleted ? ' is-content-deleted' : ''}`}
+            data-content-deleted={message.contentDeleted ? 'true' : undefined}
             data-admin-created-at={message.sender === 'admin' ? message.createdAt : undefined}
           >
             <header>

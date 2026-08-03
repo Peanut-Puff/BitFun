@@ -153,6 +153,7 @@ mod tests {
             message_id: "message-1".to_string(),
             sender: FeedbackSender::Admin,
             content: "private message body".to_string(),
+            content_deleted: true,
             created_at: "2026-07-28T01:00:00Z".to_string(),
         });
         data.sync_cursor = Some("cursor-1".to_string());
@@ -168,5 +169,18 @@ mod tests {
         tokio::fs::write(&path, b"corrupt").await.unwrap();
         assert!(cache.load("feedback-1").await.is_err());
         let _ = tokio::fs::remove_dir_all(directory).await;
+    }
+
+    #[test]
+    fn defaults_deleted_marker_for_legacy_cached_messages() {
+        let message: FeedbackMessage = serde_json::from_value(serde_json::json!({
+            "messageId": "message-legacy",
+            "sender": "admin",
+            "content": "legacy content",
+            "createdAt": "2026-07-28T01:00:00Z"
+        }))
+        .unwrap();
+
+        assert!(!message.content_deleted);
     }
 }

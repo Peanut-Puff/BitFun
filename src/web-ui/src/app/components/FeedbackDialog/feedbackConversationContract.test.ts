@@ -29,11 +29,14 @@ describe('feedback conversation contract', () => {
 
   it('keeps refresh accessible and renders server content as plain React text', () => {
     const source = readSource('./FeedbackConversationView.tsx');
+    const mock = readSource('../../../../../../scripts/feedback-mock-server.mjs');
 
     expect(source).toContain('<IconButton');
     expect(source).toContain("tooltip={t('feedback.conversation.refresh')}");
     expect(source).toContain("aria-label={t('feedback.conversation.refresh')}");
     expect(source).toContain('<p>{message.content}</p>');
+    expect(source).toContain("data-content-deleted={message.contentDeleted ? 'true' : undefined}");
+    expect(mock).toContain('content_deleted: false');
     expect(source).not.toContain('dangerouslySetInnerHTML');
   });
 

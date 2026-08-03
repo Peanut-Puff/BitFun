@@ -116,6 +116,7 @@ const server = http.createServer(async (request, response) => {
         message_id: randomUUID(),
         sender_type: 'user',
         content: body.content.trim(),
+        content_deleted: false,
         created_at: createdAt,
       }],
     });
@@ -178,6 +179,7 @@ const server = http.createServer(async (request, response) => {
       message_id: randomUUID(),
       sender_type: 'user',
       content: body.content.trim(),
+      content_deleted: false,
       created_at: createdAt,
     };
     record.messages.push(message);
@@ -316,6 +318,7 @@ function addAdminReply(feedbackId, content) {
     message_id: randomUUID(),
     sender_type: 'admin',
     content: String(content),
+    content_deleted: false,
     created_at: createdAt,
   });
   record.status = 'waiting_user';
@@ -332,6 +335,7 @@ function seedMessages(feedbackId, count) {
       message_id: randomUUID(),
       sender_type: index % 2 === 0 ? 'admin' : 'user',
       content: `Mock message ${index + 1}`,
+      content_deleted: false,
       created_at: createdAt,
     });
   }

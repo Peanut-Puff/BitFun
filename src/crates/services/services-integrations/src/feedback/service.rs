@@ -176,6 +176,7 @@ struct MessageItem {
     message_id: String,
     sender_type: FeedbackSender,
     content: String,
+    content_deleted: bool,
     created_at: String,
 }
 
@@ -611,6 +612,7 @@ impl FeedbackService {
             message_id: replied.message_id,
             sender: replied.sender_type,
             content,
+            content_deleted: false,
             created_at: replied.created_at,
         };
         if let Ok(cache) = self.message_cache().await {
@@ -1271,6 +1273,7 @@ fn merge_messages(
                 message_id: message.message_id,
                 sender: message.sender_type,
                 content: message.content,
+                content_deleted: message.content_deleted,
                 created_at: message.created_at,
             });
         }
@@ -1734,11 +1737,11 @@ mod tests {
             ),
             json_response(
                 200,
-                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","messages":[{"message_id":"message-1","sender_type":"user","content":"first","created_at":"2026-07-28T01:00:00Z"}],"cursor":"cursor-1","has_more":true}"#,
+                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","messages":[{"message_id":"message-1","sender_type":"user","content":"first","content_deleted":false,"created_at":"2026-07-28T01:00:00Z"}],"cursor":"cursor-1","has_more":true}"#,
             ),
             json_response(
                 200,
-                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","messages":[{"message_id":"message-2","sender_type":"admin","content":"second","created_at":"2026-07-28T02:00:00Z"}],"cursor":"cursor-2","has_more":false}"#,
+                r#"{"feedback_id":"11111111-1111-4111-8111-111111111111","messages":[{"message_id":"message-2","sender_type":"admin","content":"second","content_deleted":true,"created_at":"2026-07-28T02:00:00Z"}],"cursor":"cursor-2","has_more":false}"#,
             ),
             json_response(
                 200,
@@ -1782,6 +1785,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(latest.messages[0].content, "second");
+        assert!(latest.messages[0].content_deleted);
         assert_eq!(latest.next_cursor.as_deref(), Some("cache:1"));
         assert!(latest.has_more);
 
@@ -1794,6 +1798,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(earlier.messages[0].content, "first");
+        assert!(!earlier.messages[0].content_deleted);
         assert!(!earlier.has_more);
 
         let acknowledged = service

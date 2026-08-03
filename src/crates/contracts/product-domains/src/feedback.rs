@@ -99,6 +99,8 @@ pub struct FeedbackMessage {
     pub message_id: String,
     pub sender: FeedbackSender,
     pub content: String,
+    #[serde(default)]
+    pub content_deleted: bool,
     pub created_at: String,
 }
 
