@@ -1,3 +1,4 @@
+use super::identity::FeedbackIdentityStore;
 use super::message_cache::{MessageCache, MessageCacheData};
 use super::state_cache::{FeedbackStateCache, FeedbackStateCacheData};
 use super::vault::{FeedbackCredentialStore, FileFeedbackCredentialStore};
@@ -217,6 +218,7 @@ pub struct FeedbackService {
     client_version: String,
     credential_store: Arc<dyn FeedbackCredentialStore>,
     cache_dir: Option<PathBuf>,
+    identity_store: Option<FeedbackIdentityStore>,
     state: Mutex<RuntimeState>,
 }
 
@@ -257,6 +259,7 @@ impl FeedbackService {
             client_version,
             credential_store,
             cache_dir: None,
+            identity_store: None,
             state: Mutex::new(RuntimeState::default()),
         }
     }
@@ -268,6 +271,11 @@ impl FeedbackService {
 
     pub fn with_cache_dir(mut self, cache_dir: PathBuf) -> Self {
         self.cache_dir = Some(cache_dir);
+        self
+    }
+
+    pub fn with_identity_path(mut self, identity_path: PathBuf) -> Self {
+        self.identity_store = Some(FeedbackIdentityStore::new(identity_path));
         self
     }
 
@@ -1103,14 +1111,20 @@ impl FeedbackService {
             expires_at: Utc::now() + ChronoDuration::seconds(response.expires_in.max(0)),
             scopes: parse_scopes(&response.scope),
         };
+        let anonymous_id = response.anonymous_id;
         let mut next = state.stored.clone();
-        next.anonymous_id = Some(response.anonymous_id);
+        next.anonymous_id = Some(anonymous_id.clone());
         next.refresh_token = Some(response.refresh_token);
         next.refresh_idempotency_key = None;
         if enrolled {
             next.enroll_idempotency_key = None;
         }
         self.persist_credentials(&next).await?;
+        if let Some(identity_store) = &self.identity_store {
+            if identity_store.store(&anonymous_id).await.is_err() {
+                log::warn!("Failed to save the local feedback identity copy");
+            }
+        }
         state.stored = next;
         self.persist_cached_state_best_effort(&state.stored).await;
         Ok(token)
@@ -1170,6 +1184,13 @@ impl FeedbackService {
                     "Failed to migrate feedback credentials away from legacy cache fields: code={}",
                     error.code
                 );
+            }
+        }
+        if let (Some(identity_store), Some(anonymous_id)) =
+            (&self.identity_store, state.stored.anonymous_id.as_deref())
+        {
+            if identity_store.store(anonymous_id).await.is_err() {
+                log::warn!("Failed to save the local feedback identity copy");
             }
         }
         state.loaded = true;
@@ -1592,18 +1613,89 @@ mod tests {
     #[tokio::test]
     async fn access_state_does_not_create_an_identity() {
         let store = Arc::new(MemoryStore::default());
+        let identity_dir = test_cache_dir("identity-not-created");
+        let identity_path = identity_dir.join("identity.json");
         let service = FeedbackService::new(
             None,
             "1.0.0".to_string(),
             store.clone(),
             Duration::from_secs(2),
-        );
+        )
+        .with_identity_path(identity_path.clone());
 
         let state = service.access_state().await.unwrap();
 
         assert!(!state.has_history);
         assert!(!state.can_reuse_access);
         assert_eq!(store.stores.load(Ordering::SeqCst), 0);
+        assert!(!identity_path.exists());
+        let _ = tokio::fs::remove_dir_all(identity_dir).await;
+    }
+
+    #[tokio::test]
+    async fn successful_enrollment_saves_the_plain_anonymous_identity_copy() {
+        let responses = vec![json_response(
+            201,
+            r#"{"anonymous_id":"11111111-1111-4111-8111-111111111111","access_token":"access","refresh_token":"refresh","expires_in":3600,"refresh_expires_in":2592000,"scope":"feedback:write,feedback:read","schema_version":"1"}"#,
+        )];
+        let (base_url, _) = spawn_server(responses).await;
+        let cache_dir = test_cache_dir("identity-copy");
+        let identity_path = cache_dir.join("config").join("identity.json");
+        let service = FeedbackService::new(
+            Some(base_url),
+            "1.0.0".to_string(),
+            Arc::new(MemoryStore::default()),
+            Duration::from_secs(2),
+        )
+        .with_cache_dir(cache_dir.join("cache"))
+        .with_identity_path(identity_path.clone());
+
+        service.access_token("feedback:write", false).await.unwrap();
+
+        let value: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(identity_path).await.unwrap()).unwrap();
+        assert_eq!(value["schemaVersion"], 1);
+        assert_eq!(value["anonymousId"], "11111111-1111-4111-8111-111111111111");
+        assert_eq!(value.as_object().unwrap().len(), 2);
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
+    }
+
+    #[tokio::test]
+    async fn existing_cached_identity_is_copied_without_enrolling() {
+        let cache_dir = test_cache_dir("existing-identity-copy");
+        let identity_path = cache_dir.join("config").join("identity.json");
+        let stored = StoredCredentials {
+            enroll_key: "enroll".to_string(),
+            anonymous_id: Some("22222222-2222-4222-8222-222222222222".to_string()),
+            refresh_token: Some("refresh".to_string()),
+            ..StoredCredentials::default()
+        };
+        let store = Arc::new(MemoryStore {
+            value: StdMutex::new(Some(
+                serde_json::json!({
+                    "enroll_key": stored.enroll_key,
+                    "anonymous_id": stored.anonymous_id,
+                    "refresh_token": stored.refresh_token,
+                })
+                .to_string(),
+            )),
+            ..MemoryStore::default()
+        });
+        let service = FeedbackService::new(
+            None,
+            "1.0.0".to_string(),
+            store.clone(),
+            Duration::from_secs(2),
+        )
+        .with_identity_path(identity_path.clone());
+
+        let state = service.access_state().await.unwrap();
+
+        assert!(state.can_reuse_access);
+        let value: serde_json::Value =
+            serde_json::from_slice(&tokio::fs::read(identity_path).await.unwrap()).unwrap();
+        assert_eq!(value["anonymousId"], "22222222-2222-4222-8222-222222222222");
+        let _ = tokio::fs::remove_dir_all(cache_dir).await;
     }
 
     #[tokio::test]

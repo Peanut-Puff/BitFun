@@ -1,3 +1,4 @@
+mod identity;
 mod message_cache;
 mod service;
 mod state_cache;

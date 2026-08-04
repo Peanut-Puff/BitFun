@@ -397,6 +397,9 @@ pub async fn _run() {
             )
             .with_cache_dir(PathBuf::from(
                 "/data/storage/el2/base/cache/bitfun/feedback",
+            ))
+            .with_identity_path(PathBuf::from(
+                "/data/storage/el2/base/files/bitfun/config/identity.json",
             )),
         )
     };
