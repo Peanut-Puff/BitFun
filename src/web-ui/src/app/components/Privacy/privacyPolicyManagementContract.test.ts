@@ -38,15 +38,16 @@ describe('OpenHarmony privacy policy management contract', () => {
     expect(`${native}\n${dialog}`).not.toContain('quitApp');
   });
 
-  it('preserves prior consent for editorial updates and records local viewing', () => {
+  it('requires a new choice for the material V4 policy update', () => {
     const service = readSource(
       '../../../../../crates/services/services-integrations/src/privacy/mod.rs',
     );
 
-    expect(service).toContain('PrivacyChangeType::Editorial');
-    expect(service).toContain('"2026.07.1-dev-placeholder"');
+    expect(service).toContain('PrivacyChangeType::Material');
+    expect(service).toContain('const POLICY_VERSION: &str = "4.0"');
+    expect(service).toContain('const CONSENT_VERSION: &str = "4"');
     expect(service).toContain('state.viewed_policy_version.as_deref() != Some(POLICY_VERSION)');
-    expect(service).toContain('editorial_update_keeps_consent_and_clears_marker_after_viewing');
+    expect(service).toContain('v4_chinese_policy_is_release_ready_and_material');
     expect(service).toContain('changed_consent_generation_requires_a_new_choice');
   });
 });

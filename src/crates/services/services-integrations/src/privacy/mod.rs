@@ -8,31 +8,16 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-const POLICY_VERSION: &str = "2026.07.2-dev-placeholder";
-const CONSENT_VERSION: &str = "dev-placeholder-1";
-const EFFECTIVE_AT: &str = "2026-07-22T00:00:00Z";
-const UPDATED_AT: &str = "2026-07-28T00:00:00Z";
-const CHANGE_TYPE: PrivacyChangeType = PrivacyChangeType::Editorial;
+const POLICY_VERSION: &str = "4.0";
+const CONSENT_VERSION: &str = "4";
+const EFFECTIVE_AT: &str = "2026-07-30T00:00:00Z";
+const UPDATED_AT: &str = "2026-07-30T00:00:00Z";
+const CHANGE_TYPE: PrivacyChangeType = PrivacyChangeType::Material;
 const LEGAL_CONTENT_SENTINEL: &str = "LEGAL_CONTENT_REQUIRED";
 
 const ZH_CN_CONTENT: &str = include_str!("assets/zh-CN.md");
-const EN_US_CONTENT: &str = include_str!("assets/en-US.md");
-const ZH_CN_SHA256: &str = "9164815a22b2b2021039a19ed6e92556ce6ea44e42dd0103869b7c0887ae48bb";
-const EN_US_SHA256: &str = "71c9914ad977ff12fa31a5e228192d806b3b3d366498100bff615739d9b4c451";
-const ACCEPTED_POLICY_HASHES: &[(&str, &str, &str)] = &[
-    (
-        "2026.07.1-dev-placeholder",
-        "zh-CN",
-        ZH_CN_SHA256,
-    ),
-    (
-        "2026.07.1-dev-placeholder",
-        "en-US",
-        EN_US_SHA256,
-    ),
-    (POLICY_VERSION, "zh-CN", ZH_CN_SHA256),
-    (POLICY_VERSION, "en-US", EN_US_SHA256),
-];
+const ZH_CN_SHA256: &str = "8215d072ba63a4c303d5b429b4373e2bfba07e6bef6820a852aca939502dea73";
+const ACCEPTED_POLICY_HASHES: &[(&str, &str, &str)] = &[(POLICY_VERSION, "zh-CN", ZH_CN_SHA256)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -335,19 +320,12 @@ impl PrivacyService {
     }
 }
 
-fn builtin_documents() -> [BuiltinDocument; 2] {
-    [
-        BuiltinDocument {
-            locale: "zh-CN",
-            content: ZH_CN_CONTENT,
-            expected_sha256: ZH_CN_SHA256,
-        },
-        BuiltinDocument {
-            locale: "en-US",
-            content: EN_US_CONTENT,
-            expected_sha256: EN_US_SHA256,
-        },
-    ]
+fn builtin_documents() -> [BuiltinDocument; 1] {
+    [BuiltinDocument {
+        locale: "zh-CN",
+        content: ZH_CN_CONTENT,
+        expected_sha256: ZH_CN_SHA256,
+    }]
 }
 
 fn policy_view(document: BuiltinDocument) -> PrivacyPolicyView {
@@ -363,13 +341,8 @@ fn policy_view(document: BuiltinDocument) -> PrivacyPolicyView {
     }
 }
 
-fn normalize_locale(locale: &str) -> &'static str {
-    let normalized = locale.trim().to_ascii_lowercase().replace('_', "-");
-    if normalized == "zh" || normalized.starts_with("zh-") {
-        "zh-CN"
-    } else {
-        "en-US"
-    }
+fn normalize_locale(_locale: &str) -> &'static str {
+    "zh-CN"
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -399,11 +372,12 @@ fn storage_error(error: std::io::Error) -> PrivacyError {
 #[cfg(test)]
 mod tests {
     use super::{
-        CONSENT_VERSION, PrivacyCollectionPolicy, PrivacyService, PrivacyStateFile,
-        StoredPrivacyMode, ZH_CN_SHA256, normalize_locale,
+        normalize_locale, PrivacyCollectionPolicy, PrivacyService, PrivacyStateFile,
+        StoredPrivacyMode, CONSENT_VERSION, POLICY_VERSION, ZH_CN_SHA256,
     };
     use bitfun_product_domains::privacy::{
-        AcceptPrivacyRequest, PrivacyConsentRecord, PrivacyEffectiveMode, PrivacyLifecycleState,
+        AcceptPrivacyRequest, PrivacyChangeType, PrivacyConsentRecord, PrivacyEffectiveMode,
+        PrivacyLifecycleState,
     };
 
     fn temporary_directory(name: &str) -> std::path::PathBuf {
@@ -438,7 +412,8 @@ mod tests {
         PrivacyConsentRecord {
             consent_version: consent_version.to_string(),
             accepted_policy_version: "2026.07.1-dev-placeholder".to_string(),
-            accepted_document_sha256: ZH_CN_SHA256.to_string(),
+            accepted_document_sha256:
+                "9164815a22b2b2021039a19ed6e92556ce6ea44e42dd0103869b7c0887ae48bb".to_string(),
             accepted_at: "2026-07-24T00:00:00Z".to_string(),
             locale: "zh-CN".to_string(),
             app_version: "1.2.3".to_string(),
@@ -446,11 +421,12 @@ mod tests {
     }
 
     #[test]
-    fn resolves_traditional_chinese_to_simplified_policy() {
+    fn resolves_every_locale_to_the_chinese_policy() {
         assert_eq!(normalize_locale("zh-Hant-HK"), "zh-CN");
         assert_eq!(normalize_locale("zh-TW"), "zh-CN");
         assert_eq!(normalize_locale("zh-HK"), "zh-CN");
-        assert_eq!(normalize_locale("en-GB"), "en-US");
+        assert_eq!(normalize_locale("en-GB"), "zh-CN");
+        assert_eq!(normalize_locale("ja-JP"), "zh-CN");
     }
 
     #[tokio::test]
@@ -493,43 +469,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(status.lifecycle_state, PrivacyLifecycleState::Full);
-        assert!(status.consent.is_some());
+        assert_eq!(status.consent.unwrap().locale, "zh-CN");
         assert!(!directory.join("privacy-state.tmp").exists());
         let _ = tokio::fs::remove_dir_all(directory).await;
     }
 
     #[tokio::test]
-    async fn editorial_update_keeps_consent_and_clears_marker_after_viewing() {
-        let directory = temporary_directory("editorial-update");
-        let service = PrivacyService::new(directory.clone(), "zh-CN");
-        service
-            .store_state(&PrivacyStateFile {
-                mode: Some(StoredPrivacyMode::Full),
-                consent: Some(previous_consent(CONSENT_VERSION)),
-                viewed_policy_version: Some("2026.07.1-dev-placeholder".to_string()),
-            })
+    async fn v4_chinese_policy_is_release_ready_and_material() {
+        let directory = temporary_directory("v4-policy");
+        let status = PrivacyService::new(directory.clone(), "en-US")
+            .initialize("1.2.3")
             .await
             .unwrap();
+        let policy = status.policy.unwrap();
 
-        let status = service.initialize("1.2.3").await.unwrap();
-        assert_eq!(status.lifecycle_state, PrivacyLifecycleState::Full);
-        assert!(status.has_unread_update);
-
-        let viewed = service
-            .mark_viewed(
-                status.policy.as_ref().unwrap().policy_version.as_str(),
-                "1.2.3",
-                "zh-CN",
-            )
-            .await
-            .unwrap();
-        assert!(!viewed.has_unread_update);
+        assert!(status.release_ready);
+        assert_eq!(policy.policy_version, POLICY_VERSION);
+        assert_eq!(policy.consent_version, CONSENT_VERSION);
+        assert_eq!(policy.change_type, PrivacyChangeType::Material);
+        assert_eq!(policy.locale, "zh-CN");
+        assert_eq!(policy.document_sha256, ZH_CN_SHA256);
+        assert!(policy.content.starts_with("# 关于HUAWEI BitFun的隐私协议"));
         let _ = tokio::fs::remove_dir_all(directory).await;
     }
 
     #[tokio::test]
-    async fn not_accepted_update_is_marked_until_current_policy_is_chosen() {
-        let directory = temporary_directory("not-accepted-update");
+    async fn material_update_does_not_show_the_editorial_update_marker() {
+        let directory = temporary_directory("material-update-marker");
         let service = PrivacyService::new(directory.clone(), "en-US");
         service
             .store_state(&PrivacyStateFile {
@@ -540,11 +506,8 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(service.initialize("1.2.3").await.unwrap().has_unread_update);
-        let current = service
-            .enter_not_accepted("en-US", "1.2.3")
-            .await
-            .unwrap();
+        assert!(!service.initialize("1.2.3").await.unwrap().has_unread_update);
+        let current = service.enter_not_accepted("en-US", "1.2.3").await.unwrap();
         assert!(!current.has_unread_update);
         let _ = tokio::fs::remove_dir_all(directory).await;
     }

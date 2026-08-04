@@ -31,13 +31,15 @@ describe('PrivacyAPI', () => {
     );
   });
 
-  it('falls traditional Chinese previews back to the simplified document', () => {
-    const status = bundledPrivacyPreviewStatus('zh-Hant-HK');
+  it('uses the V4 Chinese document for every preview locale', () => {
+    const status = bundledPrivacyPreviewStatus('en-US');
     expect(status.enabled).toBe(false);
     expect(status.lifecycleState).toBe('full');
     expect(status.policy?.locale).toBe('zh-CN');
-    expect(status.policy?.content).toContain('开发测试占位版');
-    expect(status.policy?.policyVersion).toBe('2026.07.2-dev-placeholder');
-    expect(status.policy?.changeType).toBe('editorial');
+    expect(status.policy?.content).toContain('关于HUAWEI BitFun的隐私协议');
+    expect(status.policy?.content).not.toContain('开发测试占位版');
+    expect(status.policy?.policyVersion).toBe('4.0');
+    expect(status.policy?.consentVersion).toBe('4');
+    expect(status.policy?.changeType).toBe('material');
   });
 });
